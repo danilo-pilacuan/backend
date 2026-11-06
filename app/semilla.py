@@ -1,0 +1,157 @@
+"""Datos semilla (espejo de stores/semilla.ts, 10.2): mismos ids y valores que
+consume la UI hoy, para que el fallback de shared-lib y la API coincidan.
+"""
+
+from .domain.modelos import BitacoraEntrada, Entregable, EtapaTrabajo, Proyecto, Usuario
+
+USUARIOS_SEMILLA: list[Usuario] = [
+    Usuario(id="u-admin", nombre="Diana Admin", correo="diana@projecthub.local", roles=["Admin"], activo=True),
+    Usuario(id="u-sponsor", nombre="Sergio Sponsor", correo="sergio@projecthub.local", roles=["Sponsor"], activo=True),
+    Usuario(id="u-pm", nombre="Paula Manager", correo="paula@projecthub.local", roles=["ProjectManager"], activo=True),
+    Usuario(id="u-analista", nombre="Andres Analista", correo="andres@projecthub.local", roles=["Analista"], activo=True),
+    Usuario(id="u-stakeholder", nombre="Sofia Stakeholder", correo="sofia@projecthub.local", roles=["Stakeholder"], activo=True),
+    Usuario(id="u-doble", nombre="Daniel Doble", correo="daniel@projecthub.local", roles=["ProjectManager", "Analista"], activo=True),
+    Usuario(id="u-inactivo", nombre="Ivan Inactivo", correo="ivan@projecthub.local", roles=["Sponsor"], activo=False),
+]
+
+PROYECTOS_SEMILLA: list[Proyecto] = [
+    Proyecto(
+        id="p1",
+        nombre="Portal de pagos",
+        descripcion="Portal web de pagos en linea para clientes corporativos.",
+        patrocinador_id="u-sponsor",
+        presupuesto_estimado=180000,
+        fecha_objetivo="2027-03-31",
+        etapa="Ejecucion",
+        estado="Activo",
+    ),
+    Proyecto(
+        id="p2",
+        nombre="Data warehouse corporativo",
+        descripcion="Modelo dimensional unico para reportes gerenciales.",
+        patrocinador_id="u-sponsor",
+        presupuesto_estimado=240000,
+        fecha_objetivo="2027-06-30",
+        etapa="Planeacion",
+        estado="Activo",
+    ),
+    Proyecto(
+        id="p3",
+        nombre="App movil de field service",
+        descripcion="App para tecnicos en campo con trabajo offline.",
+        patrocinador_id="u-admin",
+        presupuesto_estimado=90000,
+        fecha_objetivo="2026-12-15",
+        etapa="PoC",
+        estado="Activo",
+    ),
+    Proyecto(
+        id="p4",
+        nombre="Migracion ERP",
+        descripcion="Migracion del ERP on-premise a la nube.",
+        patrocinador_id="u-sponsor",
+        presupuesto_estimado=320000,
+        fecha_objetivo="2026-11-30",
+        etapa="Cierre",
+        estado="Activo",
+    ),
+    Proyecto(
+        id="p5",
+        nombre="Chatbot de soporte",
+        descripcion="Chatbot de primer nivel para mesa de ayuda.",
+        patrocinador_id="u-admin",
+        presupuesto_estimado=60000,
+        fecha_objetivo="2027-01-31",
+        etapa="Iniciativa",
+        estado="Activo",
+    ),
+    Proyecto(
+        id="p6",
+        nombre="Modernizacion legado",
+        descripcion="Reemplazo del sistema legado de inventarios.",
+        patrocinador_id="u-sponsor",
+        presupuesto_estimado=150000,
+        fecha_objetivo="2026-10-31",
+        etapa="Ejecucion",
+        estado="Cancelado",
+    ),
+]
+
+ETAPAS_SEMILLA: list[EtapaTrabajo] = [
+    EtapaTrabajo(
+        id="e1",
+        proyecto_id="p1",
+        nombre="Sprint 0 - cimientos",
+        fecha_inicio="2026-09-01",
+        fecha_fin="2026-09-30",
+        responsable_id="u-pm",
+        presupuesto_asignado=30000,
+        presupuesto_consumido=28500,
+        avance=100,
+    ),
+    EtapaTrabajo(
+        id="e2",
+        proyecto_id="p1",
+        nombre="Modulo de facturacion",
+        fecha_inicio="2026-10-01",
+        fecha_fin="2026-12-15",
+        responsable_id="u-doble",
+        presupuesto_asignado=70000,
+        presupuesto_consumido=41000,
+        avance=55,
+    ),
+    EtapaTrabajo(
+        id="e3",
+        proyecto_id="p1",
+        nombre="Integracion con pasarela",
+        fecha_inicio="2026-11-01",
+        fecha_fin="2027-02-28",
+        responsable_id="u-pm",
+        presupuesto_asignado=50000,
+        presupuesto_consumido=12000,
+        avance=20,
+    ),
+    EtapaTrabajo(
+        id="e4",
+        proyecto_id="p2",
+        nombre="Modelo dimensional",
+        fecha_inicio="2026-11-10",
+        fecha_fin="2027-01-31",
+        responsable_id="u-analista",
+        presupuesto_asignado=80000,
+        presupuesto_consumido=0,
+        avance=10,
+    ),
+    EtapaTrabajo(
+        id="e5",
+        proyecto_id="p2",
+        nombre="Pipeline de carga",
+        fecha_inicio="2027-02-01",
+        fecha_fin="2027-04-30",
+        responsable_id="u-doble",
+        presupuesto_asignado=60000,
+        presupuesto_consumido=0,
+        avance=0,
+    ),
+]
+
+ENTREGABLES_SEMILLA: list[Entregable] = [
+    Entregable(id="ent-1", proyecto_id="p1", etapa="Planteamiento", nombre="Acta de planteamiento", version=1, aprobado_por_id="u-sponsor", aprobado_en="2026-08-20T10:00:00Z", creado_por_id="u-pm"),
+    Entregable(id="ent-2", proyecto_id="p1", etapa="Iniciativa", nombre="Documento de iniciativa", version=1, aprobado_por_id="u-admin", aprobado_en="2026-08-28T10:00:00Z", creado_por_id="u-pm"),
+    Entregable(id="ent-3", proyecto_id="p1", etapa="PoC", nombre="Plan de prueba de concepto", version=1, aprobado_por_id="u-sponsor", aprobado_en="2026-09-05T10:00:00Z", creado_por_id="u-doble"),
+    Entregable(id="ent-4", proyecto_id="p1", etapa="ValidacionPoC", nombre="Informe de validacion de PoC", version=1, aprobado_por_id="u-admin", aprobado_en="2026-09-12T10:00:00Z", creado_por_id="u-pm"),
+    Entregable(id="ent-5", proyecto_id="p1", etapa="Planeacion", nombre="Plan de proyecto", version=1, aprobado_por_id="u-sponsor", aprobado_en="2026-09-20T10:00:00Z", creado_por_id="u-doble"),
+    Entregable(id="ent-6", proyecto_id="p1", etapa="Contratos", nombre="Contrato o acta de compromisos", version=1, aprobado_por_id="u-admin", aprobado_en="2026-09-28T10:00:00Z", creado_por_id="u-pm"),
+    Entregable(id="ent-7", proyecto_id="p1", etapa="Ejecucion", nombre="Acta de avance de ejecucion", version=1, aprobado_por_id=None, aprobado_en=None, creado_por_id="u-doble"),
+    Entregable(id="ent-8", proyecto_id="p3", etapa="Planteamiento", nombre="Acta de planteamiento", version=1, aprobado_por_id="u-admin", aprobado_en="2026-10-01T10:00:00Z", creado_por_id="u-analista"),
+    Entregable(id="ent-9", proyecto_id="p3", etapa="Iniciativa", nombre="Documento de iniciativa", version=1, aprobado_por_id="u-sponsor", aprobado_en="2026-10-10T10:00:00Z", creado_por_id="u-analista"),
+    Entregable(id="ent-10", proyecto_id="p3", etapa="PoC", nombre="Plan de prueba de concepto", version=1, aprobado_por_id=None, aprobado_en=None, creado_por_id="u-analista"),
+]
+
+BITACORA_SEMILLA: list[BitacoraEntrada] = [
+    BitacoraEntrada(id="b1", proyecto_id="p1", autor_id="u-admin", fecha="2026-08-20T11:00:00Z", tipo="transicion", etapa_origen="Planteamiento", etapa_destino="Iniciativa", comentario="Acta aprobada por el sponsor."),
+    BitacoraEntrada(id="b2", proyecto_id="p1", autor_id="u-admin", fecha="2026-08-28T11:00:00Z", tipo="transicion", etapa_origen="Iniciativa", etapa_destino="PoC", comentario=None),
+    BitacoraEntrada(id="b3", proyecto_id="p1", autor_id="u-sponsor", fecha="2026-09-12T11:00:00Z", tipo="transicion", etapa_origen="PoC", etapa_destino="ValidacionPoC", comentario="PoC cumple criterios."),
+    BitacoraEntrada(id="b4", proyecto_id="p1", autor_id="u-admin", fecha="2026-09-28T11:30:00Z", tipo="transicion", etapa_origen="Contratos", etapa_destino="Ejecucion", comentario="Contrato firmado."),
+    BitacoraEntrada(id="b5", proyecto_id="p6", autor_id="u-admin", fecha="2026-10-15T09:00:00Z", tipo="cambio", etapa_origen=None, etapa_destino=None, comentario="Proyecto cancelado por reorganizacion."),
+]

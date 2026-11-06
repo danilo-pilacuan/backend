@@ -1,0 +1,516 @@
+"""Servicio de dominio (espejo de stores/project.store.ts y usuario.store.ts).
+
+Estado en memoria con las mismas reglas: matriz de permisos, gate de etapa,
+ciclo de vida, validaciones de etapa/presupuesto, bitacora inmutable y
+unicidad de nombre/correo. La persistencia fisica llega en una fase posterior;
+la frontera del servicio ya esta lista para un repositorio.
+"""
+
+import itertools
+import re
+from datetime import datetime, timezone
+
+from pydantic import BaseModel
+
+from .domain.calculos import (
+    avance_ponderado,
+    consumo_total,
+    presupuesto_excedido,
+    presupuesto_total,
+    validar_etapa,
+)
+from .domain.catalogos import Acciones, EtapasCicloVida, EstadoProyecto, Roles
+from .domain.ciclo_vida import _INDICE_ETAPA, validar_transicion
+from .domain.errores import (
+    ErrorDuplicado,
+    ErrorEntidadNoEncontrada,
+    ErrorEstadoProyecto,
+    ErrorPermisoDenegado,
+    ErrorValidacion,
+)
+from .domain.gates import EstadoGate, evaluar_gate, validar_aprobacion
+from .domain.matriz_permisos import exigir_permiso
+from .domain.modelos import BitacoraEntrada, Entregable, EtapaTrabajo, Proyecto, Usuario
+from .semilla import (
+    BITACORA_SEMILLA,
+    ENTREGABLES_SEMILLA,
+    ETAPAS_SEMILLA,
+    PROYECTOS_SEMILLA,
+    USUARIOS_SEMILLA,
+)
+
+_CORREO_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+_contador = itertools.count(1)
+
+
+def nuevo_id(prefijo: str) -> str:
+    return f"{prefijo}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{next(_contador)}"
+
+
+class ResumenProyecto(BaseModel):
+    """Calculos agregados del proyecto (5.1-5.5); nada se edita a mano."""
+
+    proyecto: Proyecto
+    avance: float
+    presupuesto_total: float
+    consumo_total: float
+    etapas: list[EtapaTrabajo]
+    excedido: bool
+
+
+class ServicioProyectos:
+    """Casos de uso de proyectos, etapas, entregables, gates y bitacora."""
+
+    def __init__(self) -> None:
+        self._usuarios: list[Usuario] = list(USUARIOS_SEMILLA)
+        self._proyectos: list[Proyecto] = list(PROYECTOS_SEMILLA)
+        self._etapas: list[EtapaTrabajo] = list(ETAPAS_SEMILLA)
+        self._entregables: list[Entregable] = list(ENTREGABLES_SEMILLA)
+        self._bitacora: list[BitacoraEntrada] = list(BITACORA_SEMILLA)
+
+    # ---------- Consultas ----------
+
+    def proyectos(self) -> list[Proyecto]:
+        return list(self._proyectos)
+
+    def proyecto_por_id(self, proyecto_id: str) -> Proyecto | None:
+        return next((p for p in self._proyectos if p.id == proyecto_id), None)
+
+    def etapas_de_proyecto(self, proyecto_id: str) -> list[EtapaTrabajo]:
+        return [e for e in self._etapas if e.proyecto_id == proyecto_id]
+
+    def entregables_de_proyecto(self, proyecto_id: str) -> list[Entregable]:
+        return [e for e in self._entregables if e.proyecto_id == proyecto_id]
+
+    def bitacora_de_proyecto(self, proyecto_id: str) -> list[BitacoraEntrada]:
+        return [b for b in self._bitacora if b.proyecto_id == proyecto_id]
+
+    def resumen(self, proyecto_id: str) -> ResumenProyecto:
+        proyecto = self._exigir_proyecto(proyecto_id)
+        etapas = self.etapas_de_proyecto(proyecto_id)
+        datos = [e.model_dump() for e in etapas]
+        return ResumenProyecto(
+            proyecto=proyecto,
+            avance=avance_ponderado(datos),
+            presupuesto_total=presupuesto_total(datos),
+            consumo_total=consumo_total(datos),
+            etapas=etapas,
+            excedido=any(presupuesto_excedido(d) for d in datos),
+        )
+
+    def resumenes(self) -> list[ResumenProyecto]:
+        return [self.resumen(p.id) for p in self._proyectos]
+
+    def gate_actual(self, proyecto_id: str) -> EstadoGate:
+        proyecto = self._exigir_proyecto(proyecto_id)
+        return evaluar_gate(proyecto.etapa, self.entregables_de_proyecto(proyecto_id))
+
+    # ---------- Proyectos ----------
+
+    def crear_proyecto(self, datos: dict, actor: Usuario) -> Proyecto:
+        self._exigir_actor_valido(actor)
+        exigir_permiso("Planteamiento", "editarProyecto", actor.roles)
+        nombre = str(datos.get("nombre", "")).strip()
+        if not nombre:
+            raise ErrorValidacion("El nombre del proyecto es obligatorio.")
+        if self._existe_nombre(nombre):
+            raise ErrorDuplicado("proyecto", "nombre", nombre)
+        presupuesto = datos.get("presupuesto_estimado", 0)
+        if isinstance(presupuesto, bool) or not isinstance(presupuesto, (int, float)) or presupuesto < 0:
+            raise ErrorValidacion("El presupuesto estimado no puede ser negativo.")
+        proyecto = Proyecto(
+            id=nuevo_id("p"),
+            nombre=nombre,
+            descripcion=str(datos.get("descripcion", "")),
+            patrocinador_id=str(datos.get("patrocinador_id", actor.id)),
+            presupuesto_estimado=presupuesto,
+            fecha_objetivo=str(datos.get("fecha_objetivo", "")),
+            etapa="Planteamiento",
+            estado="Activo",
+        )
+        self._proyectos.append(proyecto)
+        self._registrar_bitacora(
+            proyecto_id=proyecto.id,
+            autor_id=actor.id,
+            tipo="cambio",
+            comentario="Proyecto creado en etapa Planteamiento.",
+        )
+        return proyecto
+
+    def editar_proyecto(self, proyecto_id: str, cambios: dict, actor: Usuario) -> None:
+        proyecto = self._exigir_proyecto(proyecto_id)
+        self._exigir_actor_valido(actor)
+        self._exigir_estado_editable(proyecto.estado, "editar el proyecto")
+        exigir_permiso(proyecto.etapa, "editarProyecto", actor.roles)
+        if cambios.get("nombre") is not None:
+            nombre = str(cambios["nombre"]).strip()
+            if not nombre:
+                raise ErrorValidacion("El nombre del proyecto es obligatorio.")
+            if self._existe_nombre(nombre, proyecto_id):
+                raise ErrorDuplicado("proyecto", "nombre", nombre)
+            cambios = {**cambios, "nombre": nombre}
+        permitidos = ("nombre", "descripcion", "fecha_objetivo")
+        filtrados = {k: v for k, v in cambios.items() if k in permitidos and v is not None}
+        self._proyectos = [
+            p if p.id != proyecto_id else p.model_copy(update=filtrados) for p in self._proyectos
+        ]
+        self._registrar_bitacora(
+            proyecto_id=proyecto_id,
+            autor_id=actor.id,
+            tipo="cambio",
+            comentario="Proyecto editado.",
+        )
+
+    def cancelar_proyecto(self, proyecto_id: str, actor: Usuario, comentario: str | None = None) -> None:
+        proyecto = self._exigir_proyecto(proyecto_id)
+        self._exigir_actor_valido(actor)
+        if proyecto.estado == "Cerrado":
+            raise ErrorEstadoProyecto("Un proyecto cerrado es de solo lectura.")
+        if proyecto.etapa == "Cierre":
+            raise ErrorEstadoProyecto(
+                "No se puede cancelar un proyecto en etapa Cierre; use cerrar proyecto."
+            )
+        exigir_permiso(proyecto.etapa, "cancelarProyecto", actor.roles)
+        self._proyectos = [
+            p if p.id != proyecto_id else p.model_copy(update={"estado": "Cancelado"})
+            for p in self._proyectos
+        ]
+        self._registrar_bitacora(
+            proyecto_id=proyecto_id,
+            autor_id=actor.id,
+            tipo="cambio",
+            comentario=comentario or "Proyecto cancelado.",
+        )
+
+    def cerrar_proyecto(self, proyecto_id: str, actor: Usuario, comentario: str | None = None) -> None:
+        proyecto = self._exigir_proyecto(proyecto_id)
+        self._exigir_actor_valido(actor)
+        if proyecto.etapa != "Cierre":
+            raise ErrorEstadoProyecto("Solo se puede cerrar un proyecto en etapa Cierre.")
+        if proyecto.estado == "Cerrado":
+            raise ErrorEstadoProyecto("El proyecto ya esta cerrado.")
+        exigir_permiso("Cierre", "cerrarProyecto", actor.roles)
+        self._proyectos = [
+            p if p.id != proyecto_id else p.model_copy(update={"estado": "Cerrado"})
+            for p in self._proyectos
+        ]
+        self._registrar_bitacora(
+            proyecto_id=proyecto_id,
+            autor_id=actor.id,
+            tipo="cambio",
+            comentario=comentario or "Proyecto cerrado.",
+        )
+
+    def transicionar(
+        self,
+        proyecto_id: str,
+        destino: EtapasCicloVida,
+        actor: Usuario,
+        comentario: str | None = None,
+    ) -> None:
+        proyecto = self._exigir_proyecto(proyecto_id)
+        self._exigir_actor_valido(actor)
+        if proyecto.estado != "Activo":
+            raise ErrorEstadoProyecto(
+                f"Un proyecto {proyecto.estado.lower()} no admite transiciones."
+            )
+        validar_transicion(proyecto.etapa, destino)
+        accion: Acciones = (
+            "retrocederEtapa"
+            if _INDICE_ETAPA[destino] < _INDICE_ETAPA[proyecto.etapa]
+            else "avanzarEtapa"
+        )
+        exigir_permiso(proyecto.etapa, accion, actor.roles)
+        gate = evaluar_gate(proyecto.etapa, self.entregables_de_proyecto(proyecto_id))
+        if not gate.abierto:
+            raise ErrorValidacion(
+                f'El gate de "{proyecto.etapa}" esta cerrado: faltan {len(gate.faltantes)} '
+                f"entregable(s) y hay {len(gate.pendientes_aprobacion)} sin aprobar."
+            )
+        self._proyectos = [
+            p if p.id != proyecto_id else p.model_copy(update={"etapa": destino})
+            for p in self._proyectos
+        ]
+        self._registrar_bitacora(
+            proyecto_id=proyecto_id,
+            autor_id=actor.id,
+            tipo="transicion",
+            etapa_origen=proyecto.etapa,
+            etapa_destino=destino,
+            comentario=comentario,
+        )
+
+    # ---------- Etapas de trabajo ----------
+
+    def crear_etapa(self, datos: dict, actor: Usuario) -> EtapaTrabajo:
+        proyecto = self._exigir_proyecto(str(datos.get("proyecto_id", "")))
+        self._exigir_actor_valido(actor)
+        self._exigir_estado_editable(proyecto.estado, "crear etapas")
+        exigir_permiso(proyecto.etapa, "editarEtapaTrabajo", actor.roles)
+        etapa = EtapaTrabajo(
+            id=nuevo_id("e"),
+            proyecto_id=proyecto.id,
+            nombre=str(datos.get("nombre", "")),
+            fecha_inicio=str(datos.get("fecha_inicio", "")),
+            fecha_fin=str(datos.get("fecha_fin", "")),
+            responsable_id=str(datos.get("responsable_id", "")),
+            presupuesto_asignado=float(datos.get("presupuesto_asignado", 0)),
+            presupuesto_consumido=0,
+            avance=float(datos.get("avance", 0)),
+        )
+        self._validar_datos_etapa(etapa)
+        self._exigir_responsable_activo(etapa.responsable_id)
+        self._etapas.append(etapa)
+        self._registrar_bitacora(
+            proyecto_id=proyecto.id,
+            autor_id=actor.id,
+            tipo="cambio",
+            comentario=f'Etapa de trabajo "{etapa.nombre}" creada.',
+        )
+        return etapa
+
+    def editar_etapa(self, etapa_id: str, cambios: dict, actor: Usuario) -> None:
+        etapa = self._exigir_etapa(etapa_id)
+        proyecto = self._exigir_proyecto(etapa.proyecto_id)
+        self._exigir_actor_valido(actor)
+        self._exigir_estado_editable(proyecto.estado, "editar etapas")
+        exigir_permiso(proyecto.etapa, "editarEtapaTrabajo", actor.roles)
+        fusion = {**etapa.model_dump(), **{k: v for k, v in cambios.items() if v is not None}}
+        candidata = EtapaTrabajo(**fusion)
+        self._validar_datos_etapa(candidata)
+        if cambios.get("responsable_id") is not None:
+            self._exigir_responsable_activo(str(cambios["responsable_id"]))
+        self._etapas = [e if e.id != etapa_id else candidata for e in self._etapas]
+
+    def eliminar_etapa(self, etapa_id: str, actor: Usuario) -> None:
+        etapa = self._exigir_etapa(etapa_id)
+        proyecto = self._exigir_proyecto(etapa.proyecto_id)
+        self._exigir_actor_valido(actor)
+        self._exigir_estado_editable(proyecto.estado, "eliminar etapas")
+        exigir_permiso(proyecto.etapa, "editarEtapaTrabajo", actor.roles)
+        self._etapas = [e for e in self._etapas if e.id != etapa_id]
+
+    def registrar_avance(self, etapa_id: str, avance: float, actor: Usuario) -> None:
+        etapa = self._exigir_etapa(etapa_id)
+        proyecto = self._exigir_proyecto(etapa.proyecto_id)
+        self._exigir_actor_valido(actor)
+        self._exigir_estado_editable(proyecto.estado, "registrar avance")
+        exigir_permiso(proyecto.etapa, "editarEtapaTrabajo", actor.roles)
+        candidata = etapa.model_copy(update={"avance": avance})
+        self._validar_datos_etapa(candidata)
+        self._etapas = [e if e.id != etapa_id else candidata for e in self._etapas]
+
+    def registrar_consumo(self, etapa_id: str, consumo: float, actor: Usuario) -> None:
+        etapa = self._exigir_etapa(etapa_id)
+        proyecto = self._exigir_proyecto(etapa.proyecto_id)
+        self._exigir_actor_valido(actor)
+        self._exigir_estado_editable(proyecto.estado, "registrar consumo")
+        exigir_permiso(proyecto.etapa, "registrarConsumo", actor.roles)
+        if isinstance(consumo, bool) or not isinstance(consumo, (int, float)) or consumo < 0:
+            raise ErrorValidacion("El consumo no puede ser negativo.")
+        self._etapas = [
+            e if e.id != etapa_id else e.model_copy(update={"presupuesto_consumido": consumo})
+            for e in self._etapas
+        ]
+
+    # ---------- Entregables y gate ----------
+
+    def crear_entregable(self, datos: dict, actor: Usuario) -> Entregable:
+        proyecto = self._exigir_proyecto(str(datos.get("proyecto_id", "")))
+        self._exigir_actor_valido(actor)
+        self._exigir_estado_editable(proyecto.estado, "cargar entregables")
+        entregable = Entregable(
+            id=nuevo_id("ent"),
+            proyecto_id=proyecto.id,
+            etapa=datos["etapa"],
+            nombre=str(datos.get("nombre", "")),
+            version=int(datos.get("version", 1)),
+            creado_por_id=actor.id,
+        )
+        self._entregables.append(entregable)
+        self._registrar_bitacora(
+            proyecto_id=proyecto.id,
+            autor_id=actor.id,
+            tipo="cambio",
+            comentario=f'Entregable "{entregable.nombre}" cargado (v{entregable.version}).',
+        )
+        return entregable
+
+    def aprobar_entregable(self, entregable_id: str, actor: Usuario) -> None:
+        entregable = self._exigir_entregable(entregable_id)
+        proyecto = self._exigir_proyecto(entregable.proyecto_id)
+        self._exigir_actor_valido(actor)
+        self._exigir_estado_editable(proyecto.estado, "aprobar entregables")
+        exigir_permiso(entregable.etapa, "aprobarEntregable", actor.roles)
+        validar_aprobacion(entregable, actor.id)
+        aprobado_en = datetime.now(timezone.utc).isoformat()
+        self._entregables = [
+            e
+            if e.id != entregable_id
+            else e.model_copy(update={"aprobado_por_id": actor.id, "aprobado_en": aprobado_en})
+            for e in self._entregables
+        ]
+        self._registrar_bitacora(
+            proyecto_id=proyecto.id,
+            autor_id=actor.id,
+            tipo="aprobacion",
+            comentario=f'Entregable "{entregable.nombre}" aprobado (v{entregable.version}).',
+        )
+
+    # ---------- Usuarios (1.1-1.4, 1.8) ----------
+
+    def usuarios(self) -> list[Usuario]:
+        return list(self._usuarios)
+
+    def usuarios_activos(self) -> list[Usuario]:
+        return [u for u in self._usuarios if u.activo]
+
+    def usuario_por_id(self, usuario_id: str) -> Usuario | None:
+        return next((u for u in self._usuarios if u.id == usuario_id), None)
+
+    def crear_usuario(self, datos: dict, actor: Usuario) -> Usuario:
+        self._exigir_admin(actor)
+        nombre = self._validar_nombre(str(datos.get("nombre", "")))
+        correo = self._validar_correo(str(datos.get("correo", "")))
+        roles = self._validar_roles(datos.get("roles"))
+        usuario = Usuario(
+            id=nuevo_id("u"),
+            nombre=nombre,
+            correo=correo,
+            roles=roles,
+            activo=bool(datos.get("activo", True)),
+        )
+        self._usuarios.append(usuario)
+        return usuario
+
+    def editar_usuario(self, usuario_id: str, cambios: dict, actor: Usuario) -> None:
+        self._exigir_admin(actor)
+        actual = self.usuario_por_id(usuario_id)
+        if actual is None:
+            raise ErrorValidacion(f'El usuario "{usuario_id}" no existe.')
+        nombre = actual.nombre
+        if cambios.get("nombre") is not None:
+            nombre = self._validar_nombre(str(cambios["nombre"]))
+        correo = actual.correo
+        if cambios.get("correo") is not None:
+            correo = self._validar_correo(str(cambios["correo"]), usuario_id)
+        roles = actual.roles
+        if cambios.get("roles") is not None:
+            roles = self._validar_roles(cambios["roles"])
+        activo = bool(cambios["activo"]) if cambios.get("activo") is not None else actual.activo
+        self._usuarios = [
+            u
+            if u.id != usuario_id
+            else u.model_copy(
+                update={"nombre": nombre, "correo": correo, "roles": roles, "activo": activo}
+            )
+            for u in self._usuarios
+        ]
+
+    def desactivar_usuario(self, usuario_id: str, actor: Usuario) -> None:
+        self.editar_usuario(usuario_id, {"activo": False}, actor)
+
+    # ---------- Helpers ----------
+
+    def _existe_nombre(self, nombre: str, excepto_id: str | None = None) -> bool:
+        normalizado = nombre.lower()
+        return any(p.id != excepto_id and p.nombre.lower() == normalizado for p in self._proyectos)
+
+    def _exigir_proyecto(self, proyecto_id: str) -> Proyecto:
+        proyecto = self.proyecto_por_id(proyecto_id)
+        if proyecto is None:
+            raise ErrorEntidadNoEncontrada("Proyecto", proyecto_id)
+        return proyecto
+
+    def _exigir_etapa(self, etapa_id: str) -> EtapaTrabajo:
+        etapa = next((e for e in self._etapas if e.id == etapa_id), None)
+        if etapa is None:
+            raise ErrorEntidadNoEncontrada("Etapa de trabajo", etapa_id)
+        return etapa
+
+    def _exigir_entregable(self, entregable_id: str) -> Entregable:
+        entregable = next((e for e in self._entregables if e.id == entregable_id), None)
+        if entregable is None:
+            raise ErrorEntidadNoEncontrada("Entregable", entregable_id)
+        return entregable
+
+    def _exigir_actor_valido(self, actor: Usuario) -> None:
+        if not actor.activo:
+            raise ErrorValidacion("Un usuario inactivo no puede ejecutar acciones (1.8).")
+
+    def _exigir_estado_editable(self, estado: EstadoProyecto, operacion: str) -> None:
+        if estado == "Cerrado":
+            raise ErrorEstadoProyecto("Un proyecto cerrado es de solo lectura.")
+        if estado == "Cancelado" and operacion != "registrar consumo":
+            raise ErrorEstadoProyecto("Un proyecto cancelado no admite esta operacion.")
+
+    def _exigir_responsable_activo(self, responsable_id: str) -> None:
+        responsable = self.usuario_por_id(responsable_id)
+        if responsable is None:
+            raise ErrorEntidadNoEncontrada("Usuario", responsable_id)
+        if not responsable.activo:
+            raise ErrorValidacion("El responsable debe ser un usuario activo (1.8).")
+
+    def _exigir_admin(self, actor: Usuario) -> None:
+        semilla = any(u.id == actor.id for u in USUARIOS_SEMILLA)
+        if not actor or not semilla or not actor.activo:
+            raise ErrorValidacion("Se requiere una sesion activa para administrar usuarios.")
+        if "Admin" not in actor.roles:
+            raise ErrorPermisoDenegado("administrarUsuarios", "Administracion", ["Admin"])
+
+    def _validar_datos_etapa(self, etapa: EtapaTrabajo) -> None:
+        validar_etapa(
+            etapa.fecha_inicio,
+            etapa.fecha_fin,
+            etapa.avance,
+            etapa.presupuesto_asignado,
+            etapa.presupuesto_consumido,
+        )
+
+    def _validar_nombre(self, nombre: str) -> str:
+        limpio = nombre.strip()
+        if not limpio:
+            raise ErrorValidacion("El nombre del usuario es obligatorio.")
+        return limpio
+
+    def _validar_correo(self, correo: str, excepto_id: str | None = None) -> str:
+        limpio = correo.strip().lower()
+        if not _CORREO_RE.match(limpio):
+            raise ErrorValidacion("El correo no tiene un formato valido.")
+        if any(u.correo == limpio and u.id != excepto_id for u in self._usuarios):
+            raise ErrorDuplicado("usuario", "correo", limpio)
+        return limpio
+
+    def _validar_roles(self, roles: object) -> list[Roles]:
+        if not isinstance(roles, (list, tuple)) or len(roles) == 0:
+            raise ErrorValidacion("El usuario requiere al menos un rol (1.4).")
+        validos: list[Roles] = []
+        for rol in roles:
+            if rol not in ("Admin", "Sponsor", "ProjectManager", "Analista", "Stakeholder"):
+                raise ErrorValidacion(f'Rol desconocido: "{rol}".')
+            if rol not in validos:
+                validos.append(rol)  # type: ignore[arg-type]
+        return validos
+
+    def _registrar_bitacora(
+        self,
+        proyecto_id: str,
+        autor_id: str,
+        tipo: str,
+        comentario: str | None = None,
+        etapa_origen: EtapasCicloVida | None = None,
+        etapa_destino: EtapasCicloVida | None = None,
+    ) -> None:
+        self._bitacora.append(
+            BitacoraEntrada(
+                id=nuevo_id("b"),
+                proyecto_id=proyecto_id,
+                autor_id=autor_id,
+                fecha=datetime.now(timezone.utc).isoformat(),
+                tipo=tipo,  # type: ignore[arg-type]
+                etapa_origen=etapa_origen,
+                etapa_destino=etapa_destino,
+                comentario=comentario,
+            )
+        )
