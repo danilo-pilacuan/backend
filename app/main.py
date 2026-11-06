@@ -10,6 +10,7 @@ import logging
 import os
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.almacen import RepositorioMemoria, RepositorioPostgres
@@ -63,6 +64,22 @@ app = FastAPI(
 )
 
 app.include_router(_crear_router())
+
+# CORS para el frontend federado (shell en 4300/4400, remotes 4301-4304).
+# Sin credenciales; el actor viaja en X-Actor-Id (header simple, sin preflight).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:4300",
+        "http://localhost:4400",
+        "http://localhost:4301",
+        "http://localhost:4302",
+        "http://localhost:4303",
+        "http://localhost:4304",
+    ],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Content-Type", "X-Actor-Id"],
+)
 
 _CODIGO_A_EXCEPCION: dict[type[ErrorDominio], str] = {
     ErrorEntidadNoEncontrada: "ENTIDAD_NO_ENCONTRADA",
