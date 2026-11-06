@@ -9,6 +9,7 @@ RepositorioMemoria con semilla por defecto.
 import logging
 import os
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -26,6 +27,11 @@ from app.domain.errores import (
     ErrorValidacion,
 )
 from app.servicio import ServicioProyectos
+
+# Carga backend/.env una sola vez al importar: DATABASE_URL y credenciales de
+# la BD viven en configuracion (DEC-001/DEC-006), nunca como literales.
+# No sobreescribe variables ya presentes en el entorno.
+load_dotenv()
 
 logger = logging.getLogger("projecthub")
 
