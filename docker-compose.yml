@@ -1,0 +1,27 @@
+# PostgreSQL 17 en contenedor (DEC-006). La API lo consume via DATABASE_URL.
+#
+#   docker compose up -d
+#
+# Copia .env.example a .env antes de arrancar; el volumen projecthub_pgdata
+# conserva los datos entre reinicios.
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: projecthub-db
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-projecthub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cambiar}
+      POSTGRES_DB: ${POSTGRES_DB:-projecthub}
+    volumes:
+      - projecthub_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-projecthub} -d ${POSTGRES_DB:-projecthub}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  projecthub_pgdata:

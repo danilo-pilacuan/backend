@@ -9,6 +9,9 @@ __pycache__/
 # pytest
 .pytest_cache/
 
+# Configuracion local (credenciales; usar .env.example como plantilla)
+.env
+
 # IDE
 .vscode/
 .idea/

@@ -1,12 +1,18 @@
 """Punto de entrada FastAPI (seccion 7 de AGENTS.md, item 10.3).
 
 Contrato JSON camelCase identico a @projecthub/shared; errores de dominio
-mapeados a HTTP con body {codigo, mensaje}.
+mapeados a HTTP con body {codigo, mensaje}. La persistencia se elige por
+DATABASE_URL (DEC-006): RepositorioPostgres si esta definida, o
+RepositorioMemoria con semilla por defecto.
 """
+
+import logging
+import os
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.almacen import RepositorioMemoria, RepositorioPostgres
 from app.api.rutas import _crear_router
 from app.domain.errores import (
     CODIGOS_HTTP,
@@ -20,7 +26,32 @@ from app.domain.errores import (
 )
 from app.servicio import ServicioProyectos
 
-servicio = ServicioProyectos()
+logger = logging.getLogger("projecthub")
+
+
+def _crear_repositorio() -> RepositorioMemoria | RepositorioPostgres:
+    """Construye el repositorio segun DATABASE_URL con fallback a memoria.
+
+    Un DSN invalido o una BD inaccesible degradan a memoria (semilla) en
+    lugar de tumbar el arranque; el aviso queda en el log.
+    """
+    dsn = os.environ.get("DATABASE_URL", "").strip()
+    if not dsn:
+        return RepositorioMemoria()
+    try:
+        repositorio = RepositorioPostgres(dsn)
+        repositorio.crear_esquema()
+        repositorio.cargar_semilla()
+        logger.info("Persistencia PostgreSQL activa (DATABASE_URL).")
+        return repositorio
+    except Exception as exc:  # pragma: no cover - ruta de degradacion
+        logger.warning(
+            "PostgreSQL no disponible (%s); se usa RepositorioMemoria.", exc
+        )
+        return RepositorioMemoria()
+
+
+servicio = ServicioProyectos(_crear_repositorio())
 
 app = FastAPI(
     title="ProjectHub API",

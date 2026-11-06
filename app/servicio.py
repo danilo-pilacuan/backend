@@ -1,9 +1,10 @@
 """Servicio de dominio (espejo de stores/project.store.ts y usuario.store.ts).
 
-Estado en memoria con las mismas reglas: matriz de permisos, gate de etapa,
-ciclo de vida, validaciones de etapa/presupuesto, bitacora inmutable y
-unicidad de nombre/correo. La persistencia fisica llega en una fase posterior;
-la frontera del servicio ya esta lista para un repositorio.
+Reglas de negocio identicas: matriz de permisos, gate de etapa, ciclo de vida,
+validaciones de etapa/presupuesto, bitacora inmutable y unicidad de
+nombre/correo. El estado vive en un repositorio inyectado (app/almacen.py):
+RepositorioMemoria por defecto (semilla en cada arranque) o RepositorioPostgres
+cuando main.py recibe DATABASE_URL (DEC-006). El servicio nunca toca SQL.
 """
 
 import itertools
@@ -11,6 +12,8 @@ import re
 from datetime import datetime, timezone
 
 from pydantic import BaseModel
+
+from .almacen import RepositorioMemoria, RepositorioPostgres
 
 from .domain.calculos import (
     avance_ponderado,
@@ -65,14 +68,80 @@ class ResumenProyecto(BaseModel):
 
 
 class ServicioProyectos:
-    """Casos de uso de proyectos, etapas, entregables, gates y bitacora."""
+    """Casos de uso de proyectos, etapas, entregables, gates y bitacora.
 
-    def __init__(self) -> None:
-        self._usuarios: list[Usuario] = list(USUARIOS_SEMILLA)
-        self._proyectos: list[Proyecto] = list(PROYECTOS_SEMILLA)
-        self._etapas: list[EtapaTrabajo] = list(ETAPAS_SEMILLA)
-        self._entregables: list[Entregable] = list(ENTREGABLES_SEMILLA)
-        self._bitacora: list[BitacoraEntrada] = list(BITACORA_SEMILLA)
+    El estado se lee y escribe unicamente a traves de un repositorio
+    (app/almacen.py); las properties privadas mantienen la forma de lista
+    que usaban los 40+ metodos originales. Los agregados nuevos pasan por
+    los metodos _agregar para funcionar igual con memoria y Postgres.
+    """
+
+    def __init__(
+        self,
+        repositorio: RepositorioMemoria | RepositorioPostgres | None = None,
+    ) -> None:
+        self._repo = repositorio if repositorio is not None else RepositorioMemoria()
+
+    # Properties de acceso al repositorio. El setter hace el reemplazo de
+    # coleccion completa (patron de comprension de lista del servicio); el
+    # agregado de una entidad nueva debe usar los helpers _X_agregar.
+
+    @property
+    def _usuarios(self) -> list[Usuario]:
+        return self._repo.usuarios()
+
+    @_usuarios.setter
+    def _usuarios(self, lista: list[Usuario]) -> None:
+        self._repo.usuarios_reemplazar(lista)
+
+    @property
+    def _proyectos(self) -> list[Proyecto]:
+        return self._repo.proyectos()
+
+    @_proyectos.setter
+    def _proyectos(self, lista: list[Proyecto]) -> None:
+        self._repo.proyectos_reemplazar(lista)
+
+    @property
+    def _etapas(self) -> list[EtapaTrabajo]:
+        return self._repo.etapas()
+
+    @_etapas.setter
+    def _etapas(self, lista: list[EtapaTrabajo]) -> None:
+        self._repo.etapas_reemplazar(lista)
+
+    @property
+    def _entregables(self) -> list[Entregable]:
+        return self._repo.entregables()
+
+    @_entregables.setter
+    def _entregables(self, lista: list[Entregable]) -> None:
+        self._repo.entregables_reemplazar(lista)
+
+    @property
+    def _bitacora(self) -> list[BitacoraEntrada]:
+        return self._repo.bitacora()
+
+    @_bitacora.setter
+    def _bitacora(self, lista: list[BitacoraEntrada]) -> None:
+        self._repo.bitacora_reemplazar(lista)
+
+    # Helpers de agregado (reemplazan los .append directos sobre la lista).
+
+    def _usuarios_agregar(self, entidad: Usuario) -> None:
+        self._repo.usuarios_agregar(entidad)
+
+    def _proyectos_agregar(self, entidad: Proyecto) -> None:
+        self._repo.proyectos_agregar(entidad)
+
+    def _etapas_agregar(self, entidad: EtapaTrabajo) -> None:
+        self._repo.etapas_agregar(entidad)
+
+    def _entregables_agregar(self, entidad: Entregable) -> None:
+        self._repo.entregables_agregar(entidad)
+
+    def _bitacora_agregar(self, entidad: BitacoraEntrada) -> None:
+        self._repo.bitacora_agregar(entidad)
 
     # ---------- Consultas ----------
 
@@ -134,7 +203,7 @@ class ServicioProyectos:
             etapa="Planteamiento",
             estado="Activo",
         )
-        self._proyectos.append(proyecto)
+        self._proyectos_agregar(proyecto)
         self._registrar_bitacora(
             proyecto_id=proyecto.id,
             autor_id=actor.id,
@@ -268,7 +337,7 @@ class ServicioProyectos:
         self._validar_datos_etapa(etapa)
         self._exigir_responsable_activo(etapa.responsable_id)
         self._validar_dependencias_candidata(etapa)
-        self._etapas.append(etapa)
+        self._etapas_agregar(etapa)
         self._registrar_bitacora(
             proyecto_id=proyecto.id,
             autor_id=actor.id,
@@ -357,7 +426,7 @@ class ServicioProyectos:
             version=int(datos.get("version", 1)),
             creado_por_id=actor.id,
         )
-        self._entregables.append(entregable)
+        self._entregables_agregar(entregable)
         self._registrar_bitacora(
             proyecto_id=proyecto.id,
             autor_id=actor.id,
@@ -410,7 +479,7 @@ class ServicioProyectos:
             roles=roles,
             activo=bool(datos.get("activo", True)),
         )
-        self._usuarios.append(usuario)
+        self._usuarios_agregar(usuario)
         return usuario
 
     def editar_usuario(self, usuario_id: str, cambios: dict, actor: Usuario) -> None:
@@ -548,7 +617,7 @@ class ServicioProyectos:
         etapa_origen: EtapasCicloVida | None = None,
         etapa_destino: EtapasCicloVida | None = None,
     ) -> None:
-        self._bitacora.append(
+        self._bitacora_agregar(
             BitacoraEntrada(
                 id=nuevo_id("b"),
                 proyecto_id=proyecto_id,
