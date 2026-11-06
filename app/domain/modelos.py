@@ -46,6 +46,7 @@ class EtapaTrabajo(ModeloDominio):
     presupuesto_asignado: float
     presupuesto_consumido: float
     avance: float  # 0-100; el avance del proyecto se calcula, nunca se edita
+    dependencias: list[str] = []  # 6.5: ids de etapas prerequisito del mismo proyecto
 
 
 class Proyecto(ModeloDominio):

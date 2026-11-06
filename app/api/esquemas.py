@@ -45,6 +45,7 @@ class CuerpoEtapa(Cuerpo):
     responsable_id: str
     presupuesto_asignado: float = 0
     avance: float = 0
+    dependencias: list[str] = []  # 6.5: ids de etapas prerequisito
 
 
 class CuerpoEdicionEtapa(Cuerpo):
@@ -54,6 +55,7 @@ class CuerpoEdicionEtapa(Cuerpo):
     responsable_id: str | None = None
     presupuesto_asignado: float | None = None
     avance: float | None = None
+    dependencias: list[str] | None = None  # 6.5: reemplaza la lista completa
 
 
 class CuerpoAvance(Cuerpo):

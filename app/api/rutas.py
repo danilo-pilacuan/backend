@@ -234,7 +234,12 @@ def _crear_router() -> APIRouter:
         actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> dict:
-        servicio.editar_etapa(etapa_id, cuerpo.model_dump(exclude_none=True), actor)
+        cambios = cuerpo.model_dump(exclude_none=True)
+        if "dependencias" in cuerpo.model_fields_set:
+            # 6.5: enviar [] explicitamente borra las dependencias; exclude_none
+            # no distingue, asi que se marca aparte.
+            cambios["dependencias"] = cuerpo.dependencias
+        servicio.editar_etapa(etapa_id, cambios, actor)
         return servicio._exigir_etapa(etapa_id).model_dump(by_alias=True)  # noqa: SLF001
 
     @router.delete("/api/etapas/{etapa_id}", status_code=204)

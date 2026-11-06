@@ -99,6 +99,7 @@ ETAPAS_SEMILLA: list[EtapaTrabajo] = [
         presupuesto_asignado=70000,
         presupuesto_consumido=41000,
         avance=55,
+        dependencias=["e1"],
     ),
     EtapaTrabajo(
         id="e3",
@@ -132,6 +133,7 @@ ETAPAS_SEMILLA: list[EtapaTrabajo] = [
         presupuesto_asignado=60000,
         presupuesto_consumido=0,
         avance=0,
+        dependencias=["e4"],
     ),
 ]
 

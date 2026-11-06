@@ -21,6 +21,11 @@ from .domain.calculos import (
 )
 from .domain.catalogos import Acciones, EtapasCicloVida, EstadoProyecto, Roles
 from .domain.ciclo_vida import _INDICE_ETAPA, validar_transicion
+from .domain.dependencias import (
+    dependientes_de,
+    exigir_dependencias_completas,
+    validar_dependencias,
+)
 from .domain.errores import (
     ErrorDuplicado,
     ErrorEntidadNoEncontrada,
@@ -258,9 +263,11 @@ class ServicioProyectos:
             presupuesto_asignado=float(datos.get("presupuesto_asignado", 0)),
             presupuesto_consumido=0,
             avance=float(datos.get("avance", 0)),
+            dependencias=[str(d) for d in datos.get("dependencias", [])],
         )
         self._validar_datos_etapa(etapa)
         self._exigir_responsable_activo(etapa.responsable_id)
+        self._validar_dependencias_candidata(etapa)
         self._etapas.append(etapa)
         self._registrar_bitacora(
             proyecto_id=proyecto.id,
@@ -276,11 +283,23 @@ class ServicioProyectos:
         self._exigir_actor_valido(actor)
         self._exigir_estado_editable(proyecto.estado, "editar etapas")
         exigir_permiso(proyecto.etapa, "editarEtapaTrabajo", actor.roles)
-        fusion = {**etapa.model_dump(), **{k: v for k, v in cambios.items() if v is not None}}
+        # 6.5: dependencias enviadas explicitamente (incluso []) reemplazan la
+        # lista completa; el resto de cambios None no sobreescribe.
+        cambios_fusion = {k: v for k, v in cambios.items() if v is not None}
+        if "dependencias" in cambios:
+            cambios_fusion["dependencias"] = list(cambios["dependencias"])
+        fusion = {**etapa.model_dump(), **cambios_fusion}
         candidata = EtapaTrabajo(**fusion)
         self._validar_datos_etapa(candidata)
         if cambios.get("responsable_id") is not None:
             self._exigir_responsable_activo(str(cambios["responsable_id"]))
+        self._validar_dependencias_candidata(candidata)
+        # 6.5: al editar siempre se reexige el invariante de prerequisitos 100%
+        # si la etapa ya registra avance (protege contra relajar dependencias
+        # de una etapa avanzada).
+        exigir_dependencias_completas(
+            candidata, candidata.avance, self._etapas_del_proyecto_local(proyecto.id, candidata)
+        )
         self._etapas = [e if e.id != etapa_id else candidata for e in self._etapas]
 
     def eliminar_etapa(self, etapa_id: str, actor: Usuario) -> None:
@@ -289,6 +308,13 @@ class ServicioProyectos:
         self._exigir_actor_valido(actor)
         self._exigir_estado_editable(proyecto.estado, "eliminar etapas")
         exigir_permiso(proyecto.etapa, "editarEtapaTrabajo", actor.roles)
+        dependientes = dependientes_de(etapa_id, self._etapas)
+        if dependientes:
+            nombres = ", ".join(d.nombre for d in dependientes)
+            raise ErrorValidacion(
+                'No se puede eliminar la etapa "%s": las etapas %s dependen de ella.'
+                % (etapa.nombre, nombres)
+            )
         self._etapas = [e for e in self._etapas if e.id != etapa_id]
 
     def registrar_avance(self, etapa_id: str, avance: float, actor: Usuario) -> None:
@@ -299,6 +325,9 @@ class ServicioProyectos:
         exigir_permiso(proyecto.etapa, "editarEtapaTrabajo", actor.roles)
         candidata = etapa.model_copy(update={"avance": avance})
         self._validar_datos_etapa(candidata)
+        exigir_dependencias_completas(
+            candidata, avance, self._etapas_del_proyecto_local(proyecto.id, candidata)
+        )
         self._etapas = [e if e.id != etapa_id else candidata for e in self._etapas]
 
     def registrar_consumo(self, etapa_id: str, consumo: float, actor: Usuario) -> None:
@@ -467,6 +496,23 @@ class ServicioProyectos:
             etapa.presupuesto_asignado,
             etapa.presupuesto_consumido,
         )
+
+    def _validar_dependencias_candidata(self, candidata: EtapaTrabajo) -> None:
+        # 6.5: valida prerequisitos contra el estado proyectado (candidata ya
+        # sustituida). En creacion la candidata aun no esta en _etapas, por lo
+        # que se incluye explicitamente aunque su id sea nuevo.
+        proyectadas = [e for e in self._etapas if e.proyecto_id == candidata.proyecto_id]
+        if not any(e.id == candidata.id for e in proyectadas):
+            proyectadas.append(candidata)
+        validar_dependencias(candidata.id, candidata.proyecto_id, proyectadas)
+
+    def _etapas_del_proyecto_local(
+        self, proyecto_id: str, candidata: EtapaTrabajo
+    ) -> list[EtapaTrabajo]:
+        # En edicion la candidata sustituye a la existente; en creacion (id
+        # nuevo) se agrega. Cubre ambos casos como _validar_dependencias_candidata.
+        resto = [e for e in self._etapas if e.proyecto_id == proyecto_id and e.id != candidata.id]
+        return [*resto, candidata]
 
     def _validar_nombre(self, nombre: str) -> str:
         limpio = nombre.strip()
