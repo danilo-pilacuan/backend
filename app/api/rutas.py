@@ -8,6 +8,14 @@ permiso, 422 validacion.
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 
+from app.auth import (
+    ServicioCredenciales,
+    contrasena_demo,
+    crear_token,
+    extraer_bearer,
+    leer_secreto,
+    leer_token,
+)
 from app.domain.errores import ErrorEntidadNoEncontrada, ErrorValidacion
 from app.domain.modelos import Usuario
 from app.servicio import ServicioProyectos, ResumenProyecto
@@ -21,6 +29,7 @@ from .esquemas import (
     CuerpoEdicionUsuario,
     CuerpoEntregable,
     CuerpoEtapa,
+    CuerpoLogin,
     CuerpoProyecto,
     CuerpoTransicion,
     CuerpoUsuario,
@@ -33,12 +42,36 @@ def obtener_servicio() -> ServicioProyectos:
     return servicio
 
 
+def obtener_credenciales() -> ServicioCredenciales:
+    from app.main import credenciales
+
+    return credenciales
+
+
+def obtener_secreto() -> str:
+    from app.main import secreto_auth
+
+    return secreto_auth
+
+
 def obtener_actor(
+    authorization: str | None = Header(default=None),
     x_actor_id: str | None = Header(default=None),
     servicio: ServicioProyectos = Depends(obtener_servicio),
+    secreto: str = Depends(obtener_secreto),
 ) -> Usuario:
+    """Actor de la peticion: Bearer JWT (prioridad) o X-Actor-Id (compatibilidad)."""
+    token = extraer_bearer(authorization)
+    if token is not None:
+        usuario_id = leer_token(token, secreto)
+        if usuario_id is None:
+            raise ErrorValidacion("Token de sesion invalido o expirado.")
+        actor = servicio.usuario_por_id(usuario_id)
+        if actor is None:
+            raise ErrorEntidadNoEncontrada("Usuario", usuario_id)
+        return actor
     if not x_actor_id:
-        raise ErrorValidacion("Falta el header X-Actor-Id para identificar la sesion.")
+        raise ErrorValidacion("Falta autenticar la sesion (Bearer token o X-Actor-Id).")
     actor = servicio.usuario_por_id(x_actor_id)
     if actor is None:
         raise ErrorEntidadNoEncontrada("Usuario", x_actor_id)
@@ -65,6 +98,41 @@ def _crear_router() -> APIRouter:
     def salud() -> dict:
         return {"estado": "ok", "servicio": "projecthub-backend"}
 
+    # ----- Autenticacion (10.3, fase 14) -----
+
+    @router.post("/api/auth/login")
+    def iniciar_sesion(
+        cuerpo: CuerpoLogin,
+        servicio: ServicioProyectos = Depends(obtener_servicio),
+        credenciales: ServicioCredenciales = Depends(obtener_credenciales),
+        secreto: str = Depends(obtener_secreto),
+    ) -> dict:
+        """Valida credenciales y devuelve un JWT con sub = id de usuario."""
+        usuario = next(
+            (u for u in servicio.usuarios() if u.correo.lower() == cuerpo.correo.lower()),
+            None,
+        )
+        if usuario is None or not credenciales.autenticar(usuario.correo, cuerpo.contrasena):
+            raise HTTPException(
+                status_code=401,
+                detail={"codigo": "CREDENCIALES_INVALIDAS", "mensaje": "Correo o contrasena incorrectos."},
+            )
+        if not usuario.activo:
+            raise HTTPException(
+                status_code=403,
+                detail={"codigo": "USUARIO_INACTIVO", "mensaje": "Un usuario inactivo no puede iniciar sesion."},
+            )
+        return {
+            "token": crear_token(usuario.id, secreto),
+            "tipo": "Bearer",
+            "usuario": usuario.model_dump(by_alias=True),
+        }
+
+    @router.get("/api/auth/me")
+    def usuario_actual(actor: Usuario = Depends(obtener_actor)) -> dict:
+        """Usuario de la sesion (restaurar sesion al recargar el frontend)."""
+        return actor.model_dump(by_alias=True)
+
     # ----- Usuarios -----
 
     @router.get("/api/usuarios")
@@ -80,8 +148,12 @@ def _crear_router() -> APIRouter:
         cuerpo: CuerpoUsuario,
         actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
+        credenciales: ServicioCredenciales = Depends(obtener_credenciales),
     ) -> dict:
-        return servicio.crear_usuario(cuerpo.model_dump(), actor).model_dump(by_alias=True)
+        creado = servicio.crear_usuario(cuerpo.model_dump(), actor)
+        # Credencial demo inicial; el cambio de contrasena es DEC pendiente.
+        credenciales.registrar(creado.correo, contrasena_demo())
+        return creado.model_dump(by_alias=True)
 
     @router.patch("/api/usuarios/{usuario_id}")
     def editar_usuario(

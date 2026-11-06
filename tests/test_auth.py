@@ -1,0 +1,194 @@
+"""Tests de autenticacion (10.3, fase 14): login, JWT, me y fallback X-Actor-Id."""
+
+import jwt as pyjwt
+import pytest
+from fastapi.testclient import TestClient
+
+from app.auth import (
+    CONTRASENA_DEMO_DEFAULT,
+    hash_contrasena,
+    leer_token,
+    verificar_contrasena,
+)
+from app.main import app, secreto_auth
+
+client = TestClient(app)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _estado_restaurado():
+    """El estado de la app es un singleton en memoria compartido por los tests.
+
+    Algunos tests de este modulo reemplazan colecciones (p. ej. eliminar un
+    usuario via PUT /api/sincronizacion); aqui se guarda el estado completo al
+    entrar y se restaura al salir para no contaminar los demas modulos.
+    """
+    estado = client.get("/api/sincronizacion").json()
+    yield
+    client.put(
+        "/api/sincronizacion",
+        json=estado,
+        headers={"X-Actor-Id": "u-admin"},
+    )
+
+
+def _login(correo: str, contrasena: str):
+    return client.post("/api/auth/login", json={"correo": correo, "contrasena": contrasena})
+
+
+# ---------- Hash de contrasena ----------
+
+
+def test_hash_contrasena_con_sal_y_verificacion():
+    almacenado = hash_contrasena("secreto-1")
+    assert almacenado != "secreto-1"
+    assert almacenado.startswith("pbkdf2_sha256$")
+    assert verificar_contrasena("secreto-1", almacenado)
+    assert not verificar_contrasena("otra", almacenado)
+
+
+def test_hash_contrasena_determinista_con_misma_sal():
+    a = hash_contrasena("x", sal=bytes(16))
+    b = hash_contrasena("x", sal=bytes(16))
+    assert a == b
+
+
+def test_verificar_contrasena_formato_corrupto_es_false():
+    assert not verificar_contrasena("x", "no-es-un-hash")
+    assert not verificar_contrasena("x", "sha256$1$ab$cd")
+
+
+# ---------- Token ----------
+
+
+def test_token_crea_y_lee_sub():
+    token = client.post(  # sesion real de usuario de semilla
+        "/api/auth/login",
+        json={"correo": "diana@projecthub.local", "contrasena": CONTRASENA_DEMO_DEFAULT},
+    ).json()["token"]
+    assert leer_token(token, secreto_auth) == "u-admin"
+
+
+def test_token_con_secreto_distinto_es_rechazado():
+    token = client.post(
+        "/api/auth/login",
+        json={"correo": "diana@projecthub.local", "contrasena": CONTRASENA_DEMO_DEFAULT},
+    ).json()["token"]
+    assert leer_token(token, "otro-secreto-suficientemente-largo-para-hmac") is None
+
+
+def test_token_expirado_es_rechazado():
+    token = pyjwt.encode(
+        {"sub": "u-admin", "exp": 1}, secreto_auth, algorithm="HS256"
+    )
+    assert leer_token(token, secreto_auth) is None
+
+
+# ---------- Login ----------
+
+
+def test_login_demo_de_semilla_devuelve_token_y_usuario():
+    respuesta = _login("diana@projecthub.local", CONTRASENA_DEMO_DEFAULT)
+    assert respuesta.status_code == 200
+    datos = respuesta.json()
+    assert datos["tipo"] == "Bearer"
+    assert datos["usuario"]["id"] == "u-admin"
+    assert "token" in datos and datos["token"].count(".") == 2
+
+
+def test_login_correo_insensible_a_mayusculas():
+    respuesta = _login("Diana@ProjectHub.local", CONTRASENA_DEMO_DEFAULT)
+    assert respuesta.status_code == 200
+
+
+def test_login_contrasena_incorrecta_responde_401():
+    respuesta = _login("diana@projecthub.local", "incorrecta")
+    assert respuesta.status_code == 401
+    assert respuesta.json()["detail"]["codigo"] == "CREDENCIALES_INVALIDAS"
+
+
+def test_login_usuario_inexistente_responde_401():
+    respuesta = _login("nadie@projecthub.local", CONTRASENA_DEMO_DEFAULT)
+    assert respuesta.status_code == 401
+
+
+def test_login_usuario_inactivo_responde_403():
+    respuesta = _login("ivan@projecthub.local", CONTRASENA_DEMO_DEFAULT)
+    assert respuesta.status_code == 403
+    assert respuesta.json()["detail"]["codigo"] == "USUARIO_INACTIVO"
+
+
+# ---------- Sesion con token ----------
+
+
+def test_me_con_token_devuelve_usuario():
+    token = _login("paula@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
+    respuesta = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert respuesta.status_code == 200
+    assert respuesta.json()["id"] == "u-pm"
+
+
+def test_me_sin_token_responde_422_validacion():
+    respuesta = client.get("/api/auth/me")
+    assert respuesta.status_code == 422
+    assert respuesta.json()["codigo"] == "VALIDACION"
+
+
+def test_token_invalido_en_ruta_protegida_responde_422():
+    respuesta = client.get(
+        "/api/auth/me", headers={"Authorization": "Bearer no-es-un-jwt"}
+    )
+    assert respuesta.status_code == 422
+    assert "invalido" in respuesta.json()["mensaje"]
+
+
+def test_token_de_usuario_eliminado_responde_404():
+    token = _login("sergio@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
+    # El estado del test es de memoria (conftest): se elimina el usuario por
+    # sincronizacion (el actor del PUT es otro usuario con token valido).
+    admin_token = _login("diana@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
+    usuarios = client.get("/api/usuarios").json()
+    restantes = [u for u in usuarios if u["id"] != "u-sponsor"]
+    respuesta = client.put(
+        "/api/sincronizacion",
+        json={"usuarios": restantes, "proyectos": [], "etapas": [], "entregables": [], "bitacora": []},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert respuesta.status_code == 200
+    after = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert after.status_code == 404
+
+
+def test_rutas_protegidas_aceptan_token_en_lugar_de_x_actor_id():
+    token = _login("paula@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
+    respuesta = client.post(
+        "/api/proyectos",
+        json={"nombre": "Proyecto con token", "fechaObjetivo": "2027-01-01"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert respuesta.status_code == 201
+
+
+def test_fallback_x_actor_id_sigue_funcionando():
+    respuesta = client.get("/api/auth/me", headers={"X-Actor-Id": "u-admin"})
+    assert respuesta.status_code == 200
+    assert respuesta.json()["id"] == "u-admin"
+
+
+def test_usuario_nuevo_recibe_credencial_demo():
+    admin_token = _login("diana@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
+    creada = client.post(
+        "/api/usuarios",
+        json={"nombre": "Nueva Usuario", "correo": "nueva@projecthub.local", "roles": ["Analista"], "activo": True},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert creada.status_code == 201
+    respuesta = _login("nueva@projecthub.local", CONTRASENA_DEMO_DEFAULT)
+    assert respuesta.status_code == 200
+
+
+def test_orden_activo_inactivo_en_login_error_primero():
+    # Cubre el orden de las guardas: contrasena incorrecta en usuario inactivo
+    # responde 401 (credenciales), no 403.
+    respuesta = _login("ivan@projecthub.local", "incorrecta")
+    assert respuesta.status_code == 401

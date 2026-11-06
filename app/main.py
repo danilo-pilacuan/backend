@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 
 from app.almacen import RepositorioMemoria, RepositorioPostgres
 from app.api.rutas import _crear_router
+from app.auth import ServicioCredenciales, leer_secreto
 from app.domain.errores import (
     CODIGOS_HTTP,
     ErrorDominio,
@@ -60,19 +61,25 @@ def _crear_repositorio() -> RepositorioMemoria | RepositorioPostgres:
 
 servicio = ServicioProyectos(_crear_repositorio())
 
+# Autenticacion (10.3, fase 14): credenciales en memoria + secreto de firma JWT.
+credenciales = ServicioCredenciales()
+secreto_auth = leer_secreto(logger)
+
 app = FastAPI(
     title="ProjectHub API",
     version="0.1.0",
     description=(
         "Backend de gobernanza de proyectos. El contrato JSON usa camelCase "
-        "identico a @projecthub/shared; el actor de sesion llega en X-Actor-Id."
+        "identico a @projecthub/shared; autenticacion por Bearer JWT en "
+        "/api/auth/login (X-Actor-Id queda como fallback de compatibilidad)."
     ),
 )
 
 app.include_router(_crear_router())
 
 # CORS para el frontend federado (shell en 4300/4400, remotes 4301-4304).
-# Sin credenciales; el actor viaja en X-Actor-Id (header simple, sin preflight).
+# Sin credenciales (cookies); la sesion viaja en el header Authorization
+# (Bearer JWT) y X-Actor-Id queda como fallback.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -84,7 +91,7 @@ app.add_middleware(
         "http://localhost:4304",
     ],
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Content-Type", "X-Actor-Id"],
+    allow_headers=["Content-Type", "X-Actor-Id", "Authorization"],
 )
 
 _CODIGO_A_EXCEPCION: dict[type[ErrorDominio], str] = {

@@ -32,6 +32,11 @@ class CuerpoComentario(Cuerpo):
     comentario: str | None = None
 
 
+class CuerpoLogin(Cuerpo):
+    correo: str
+    contrasena: str
+
+
 class CuerpoTransicion(Cuerpo):
     destino: EtapasCicloVida
     comentario: str | None = None
