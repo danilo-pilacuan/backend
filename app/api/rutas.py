@@ -308,4 +308,27 @@ def _crear_router() -> APIRouter:
     ) -> list[dict]:
         return [b.model_dump(by_alias=True) for b in servicio.bitacora_de_proyecto(proyecto_id)]
 
+    # ----- Sincronizacion de estado (13.4: escrituras del frontend) -----
+
+    @router.get("/api/sincronizacion")
+    def leer_estado(
+        servicio: ServicioProyectos = Depends(obtener_servicio),
+    ) -> dict:
+        """Estado completo del dominio para el bootstrap de los stores."""
+        return servicio.estado_completo()
+
+    @router.put("/api/sincronizacion")
+    def escribir_estado(
+        cuerpo: dict,
+        actor: Usuario = Depends(obtener_actor),
+        servicio: ServicioProyectos = Depends(obtener_servicio),
+    ) -> dict:
+        """Reemplaza el estado con el del cliente (re-sync total).
+
+        El frontend valida con las mismas reglas de dominio y empuja su
+        estado completo tras cada mutacion; el backend revalida la
+        invariante minima (estructuras y unicidad) y persiste.
+        """
+        return servicio.escribir_estado_completo(cuerpo, actor.id)
+
     return router

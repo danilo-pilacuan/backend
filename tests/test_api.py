@@ -249,3 +249,64 @@ def test_no_admin_no_gestiona_usuarios():
         actor=PM,
     )
     assert respuesta.status_code == 409
+
+
+# ---------- Sincronizacion de estado (13.4) ----------
+
+
+def test_leer_estado_devuelve_las_cinco_colecciones():
+    respuesta = client.get("/api/sincronizacion")
+    assert respuesta.status_code == 200
+    estado = respuesta.json()
+    for clave in ("usuarios", "proyectos", "etapas", "entregables", "bitacora"):
+        assert clave in estado and isinstance(estado[clave], list)
+    assert len(estado["proyectos"]) >= 6
+    assert estado["proyectos"][0]["presupuestoEstimado"] >= 0
+
+
+def test_escribir_estado_roundtrip_camellcase():
+    estado = client.get("/api/sincronizacion").json()
+    estado["proyectos"][0]["nombre"] = "Renombrado via sincronizacion"
+    respuesta = client.put(
+        "/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM}
+    )
+    assert respuesta.status_code == 200
+    verificado = client.get("/api/sincronizacion").json()
+    assert verificado["proyectos"][0]["nombre"] == "Renombrado via sincronizacion"
+    assert len(verificado["proyectos"]) == len(estado["proyectos"])
+
+
+def test_escribir_estado_sin_actor_responde_422():
+    estado = client.get("/api/sincronizacion").json()
+    respuesta = client.put("/api/sincronizacion", json=estado)
+    assert respuesta.status_code == 422
+
+
+def test_escribir_estado_coleccion_invalida_responde_422():
+    estado = client.get("/api/sincronizacion").json()
+    estado["proyectos"] = "no-soy-una-lista"
+    respuesta = client.put(
+        "/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM}
+    )
+    assert respuesta.status_code == 422
+    assert respuesta.json()["codigo"] == "VALIDACION"
+
+
+def test_escribir_estado_ids_duplicados_responde_422():
+    estado = client.get("/api/sincronizacion").json()
+    estado["proyectos"].append(dict(estado["proyectos"][0]))
+    respuesta = client.put(
+        "/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM}
+    )
+    assert respuesta.status_code == 422
+    assert "duplicados" in respuesta.json()["mensaje"]
+
+
+def test_escribir_estado_entidad_invalida_responde_422():
+    estado = client.get("/api/sincronizacion").json()
+    estado["proyectos"][0]["etapa"] = "EtapaInexistente"
+    respuesta = client.put(
+        "/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM}
+    )
+    assert respuesta.status_code == 422
+    assert respuesta.json()["codigo"] == "VALIDACION"

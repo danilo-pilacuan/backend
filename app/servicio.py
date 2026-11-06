@@ -8,12 +8,15 @@ cuando main.py recibe DATABASE_URL (DEC-006). El servicio nunca toca SQL.
 """
 
 import itertools
+import logging
 import re
 from datetime import datetime, timezone
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .almacen import RepositorioMemoria, RepositorioPostgres
+
+logger = logging.getLogger("projecthub")
 
 from .domain.calculos import (
     avance_ponderado,
@@ -179,6 +182,54 @@ class ServicioProyectos:
     def gate_actual(self, proyecto_id: str) -> EstadoGate:
         proyecto = self._exigir_proyecto(proyecto_id)
         return evaluar_gate(proyecto.etapa, self.entregables_de_proyecto(proyecto_id))
+
+    # ---------- Sincronizacion de estado (13.4: escrituras del frontend) ----------
+
+    def estado_completo(self) -> dict:
+        """Estado completo del dominio en JSON camelCase (lectura masiva)."""
+        return {
+            "usuarios": [u.model_dump(mode="json", by_alias=True) for u in self._usuarios],
+            "proyectos": [p.model_dump(mode="json", by_alias=True) for p in self._proyectos],
+            "etapas": [e.model_dump(mode="json", by_alias=True) for e in self._etapas],
+            "entregables": [e.model_dump(mode="json", by_alias=True) for e in self._entregables],
+            "bitacora": [b.model_dump(mode="json", by_alias=True) for b in self._bitacora],
+        }
+
+    def escribir_estado_completo(self, cuerpo: dict, actor_id: str) -> dict:
+        """Reemplaza el estado con el que empuja el cliente (re-sync total).
+
+        Validacion minima: cada coleccion debe ser una lista de objetos con
+        `id` string unico dentro de su coleccion; los modelos se validan con
+        Pydantic (populate_by_name acepta camelCase). Lanza ErrorValidacion
+        si el payload no tiene la forma esperada.
+        """
+        claves = {"usuarios", "proyectos", "etapas", "entregables", "bitacora"}
+        for clave in claves:
+            coleccion = cuerpo.get(clave)
+            if not isinstance(coleccion, list):
+                raise ErrorValidacion(f"La coleccion '{clave}' debe ser una lista.")
+            ids = [item.get("id") for item in coleccion if isinstance(item, dict)]
+            if any(not isinstance(i, str) for i in ids):
+                raise ErrorValidacion(f"Todas las entidades de '{clave}' requieren id string.")
+            if len(ids) != len(set(ids)):
+                raise ErrorValidacion(f"La coleccion '{clave}' tiene ids duplicados.")
+        try:
+            usuarios = [Usuario.model_validate(u) for u in cuerpo["usuarios"]]
+            proyectos = [Proyecto.model_validate(p) for p in cuerpo["proyectos"]]
+            etapas = [EtapaTrabajo.model_validate(e) for e in cuerpo["etapas"]]
+            entregables = [Entregable.model_validate(e) for e in cuerpo["entregables"]]
+            bitacora = [BitacoraEntrada.model_validate(b) for b in cuerpo["bitacora"]]
+        except ValidationError as exc:
+            raise ErrorValidacion(f"Entidad invalida en el estado: {exc}") from exc
+        self._usuarios = usuarios
+        self._proyectos = proyectos
+        self._etapas = etapas
+        self._entregables = entregables
+        self._bitacora = bitacora
+        logger.info(
+            "Estado sincronizado por el actor %s (%d proyectos).", actor_id, len(proyectos)
+        )
+        return self.estado_completo()
 
     # ---------- Proyectos ----------
 
