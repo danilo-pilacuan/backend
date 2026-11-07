@@ -229,7 +229,18 @@ class ServicioProyectos:
         logger.info(
             "Estado sincronizado por el actor %s (%d proyectos).", actor_id, len(proyectos)
         )
+        from .auth import ServicioCredenciales
+
+        credenciales: ServicioCredenciales | None = getattr(self, "_credenciales", None)
+        if credenciales is not None:
+            credenciales.sincronizar_con_usuarios({u.correo for u in usuarios})
         return self.estado_completo()
+
+    def asignar_credenciales(self, credenciales: object) -> None:
+        """Inyeccion tardia del servicio de credenciales (14.5): el singleton
+        se crea antes que las credenciales por orden de import; el enlace se
+        hace al cablear la app para limpiar huerfanas en cada re-sync."""
+        self._credenciales = credenciales
 
     # ---------- Proyectos ----------
 
@@ -548,6 +559,9 @@ class ServicioProyectos:
         if cambios.get("roles") is not None:
             roles = self._validar_roles(cambios["roles"])
         activo = bool(cambios["activo"]) if cambios.get("activo") is not None else actual.activo
+        credenciales = getattr(self, "_credenciales", None)
+        if credenciales is not None and correo != actual.correo:
+            credenciales.renombrar(actual.correo, correo)
         self._usuarios = [
             u
             if u.id != usuario_id

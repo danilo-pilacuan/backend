@@ -22,6 +22,7 @@ from app.servicio import ServicioProyectos, ResumenProyecto
 
 from .esquemas import (
     CuerpoAvance,
+    CuerpoCambioContrasena,
     CuerpoComentario,
     CuerpoConsumo,
     CuerpoEdicionEtapa,
@@ -132,6 +133,30 @@ def _crear_router() -> APIRouter:
     def usuario_actual(actor: Usuario = Depends(obtener_actor)) -> dict:
         """Usuario de la sesion (restaurar sesion al recargar el frontend)."""
         return actor.model_dump(by_alias=True)
+
+    @router.put("/api/auth/contrasena")
+    def cambiar_contrasena(
+        cuerpo: CuerpoCambioContrasena,
+        actor: Usuario = Depends(obtener_actor),
+        credenciales: ServicioCredenciales = Depends(obtener_credenciales),
+    ) -> dict:
+        """Cambio de contrasena propia (14.5): exige la actual y politica minima.
+
+        401 con CONTRASENA_ACTUAL_INVALIDA si la actual no verifica (no
+        distingue usuario inexistente); ErrorValidacion -> 422 si la nueva
+        viola la politica. La nueva credencial persiste en la tabla
+        `credenciales` (Postgres) o memoria (fallback).
+        """
+        cambiada = credenciales.cambiar(actor.correo, cuerpo.contrasena_actual, cuerpo.contrasena_nueva)
+        if not cambiada:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "codigo": "CONTRASENA_ACTUAL_INVALIDA",
+                    "mensaje": "La contrasena actual no es correcta.",
+                },
+            )
+        return {"cambiada": True}
 
     # ----- Usuarios -----
 

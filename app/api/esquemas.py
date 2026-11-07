@@ -37,6 +37,11 @@ class CuerpoLogin(Cuerpo):
     contrasena: str
 
 
+class CuerpoCambioContrasena(Cuerpo):
+    contrasena_actual: str
+    contrasena_nueva: str
+
+
 class CuerpoTransicion(Cuerpo):
     destino: EtapasCicloVida
     comentario: str | None = None

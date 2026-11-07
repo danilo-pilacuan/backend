@@ -3,12 +3,12 @@
 Diseno:
 - Contrase\u00f1a: hash PBKDF2-HMAC-SHA256 (stdlib hashlib) con sal aleatoria por
   usuario e iteraciones fijas. Nunca se almacena ni se devuelve texto plano.
-- Credenciales: diccionario correo -> hash en memoria del proceso. Se siembran
-  de forma perezosa en el primer login con la contrasena demo (env
+- Credenciales (14.5): repositorio propio de hashes correo -> PBKDF2 (tabla
+  `credenciales` en Postgres, o memoria sin DATABASE_URL). Se siembran de
+  forma perezosa en el primer login con la contrasena demo (env
   AUTH_CONTRASENA_DEMO, por defecto "projecthub-demo") y todo usuario nuevo
-  creado por la API recibe la misma credencial demo. Limitacion documentada:
-  no hay endpoint de cambio de contrasena, por lo que la memoria es suficiente;
-  si se agrega, las credenciales deben migrar a su propia tabla (DEC pendiente).
+  creado por la API recibe la misma credencial demo. El cambio de contrasena
+  exige la actual (re-verificacion) y una minima politica de longitud.
 - Token: JWT HS256 (PyJWT) con sub = id de usuario y exp. La firma vive en
   AUTH_SECRET (env); si no esta definida, se genera una aleatoria al arrancar
   (los tokens no sobreviven al reinicio) y queda un warning en el log.
@@ -27,10 +27,20 @@ import time
 
 import jwt
 
+from .almacen import RepositorioCredencialesMemoria
+
 _ITERACIONES = 240_000
 _TokenDuracionSegundos = 7 * 24 * 3600
 
 CONTRASENA_DEMO_DEFAULT = "projecthub-demo"
+
+# Politica minima de contrasena (14.5): longitud >= 8, sin mas reglas por ahora.
+LONGITUD_MINIMA_CONTRASENA = 8
+
+
+def contrasena_valida(contrasena: str) -> bool:
+    """Politica minima de la contrasena nueva (14.5)."""
+    return isinstance(contrasena, str) and len(contrasena) >= LONGITUD_MINIMA_CONTRASENA
 
 
 def contrasena_demo() -> str:
@@ -63,22 +73,64 @@ def verificar_contrasena(contrasena: str, almacenado: str) -> bool:
 
 
 class ServicioCredenciales:
-    """Credenciales por correo en memoria, sembradas de forma perezosa."""
+    """Credenciales por correo sobre un repositorio (Postgres o memoria),
+    sembradas de forma perezosa con la demo en el primer login.
 
-    def __init__(self) -> None:
-        self._hashes: dict[str, str] = {}
+    El repositorio se inyecta para que los tests usen memoria y el proceso
+    real persista (14.5): cambiar la contrasena sobrevive al reinicio.
+    """
+
+    def __init__(self, repositorio: RepositorioCredencialesMemoria | None = None) -> None:
+        self._repositorio = repositorio if repositorio is not None else RepositorioCredencialesMemoria()
 
     def autenticar(self, correo: str, contrasena: str) -> bool:
         """True si la contrasena es valida. Siembra la demo si no existe credencial."""
-        almacenado = self._hashes.get(correo)
+        almacenado = self._repositorio.listar().get(correo)
         if almacenado is None:
             almacenado = hash_contrasena(contrasena_demo())
-            self._hashes[correo] = almacenado
+            self._repositorio.guardar(correo, almacenado)
         return verificar_contrasena(contrasena, almacenado)
 
     def registrar(self, correo: str, contrasena: str) -> None:
         """Credencial inicial de un usuario nuevo (sobrescribe si re-crea)."""
-        self._hashes[correo] = hash_contrasena(contrasena)
+        self._repositorio.guardar(correo, hash_contrasena(contrasena))
+
+    def cambiar(self, correo: str, contrasena_actual: str, contrasena_nueva: str) -> bool:
+        """Cambio de contrasena (14.5): exige la actual y la politica minima.
+
+        Devuelve False si la credencial no existe o la actual no verifica.
+        Lanza ErrorValidacion si la nueva viola la politica. Idempotente ante
+        reintentos: la escritura es un upsert.
+        """
+        from .domain.errores import ErrorValidacion
+
+        almacenado = self._repositorio.listar().get(correo)
+        if almacenado is None:
+            almacenado = hash_contrasena(contrasena_demo())
+            self._repositorio.guardar(correo, almacenado)
+        if not verificar_contrasena(contrasena_actual, almacenado):
+            return False
+        if not contrasena_valida(contrasena_nueva):
+            raise ErrorValidacion(
+                f"La contrasena nueva debe tener al menos {LONGITUD_MINIMA_CONTRASENA} caracteres."
+            )
+        self._repositorio.guardar(correo, hash_contrasena(contrasena_nueva))
+        return True
+
+    def renombrar(self, correo_anterior: str, correo_nuevo: str) -> None:
+        """Mueve la credencial si el correo del usuario cambia (edicion de perfil)."""
+        if correo_anterior == correo_nuevo:
+            return
+        hashes = self._repositorio.listar()
+        hash_actual = hashes.get(correo_anterior)
+        if hash_actual is None:
+            return
+        self._repositorio.guardar(correo_nuevo, hash_actual)
+        self._repositorio.eliminar(correo_anterior)
+
+    def sincronizar_con_usuarios(self, correos: set[str]) -> None:
+        """Limpia credenciales huerfanas tras un re-sync total (14.5)."""
+        self._repositorio.eliminar_excepto(correos)
 
 
 def leer_secreto(log: object) -> str:

@@ -14,7 +14,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.almacen import RepositorioMemoria, RepositorioPostgres
+from app.almacen import (
+    RepositorioCredencialesPostgres,
+    RepositorioMemoria,
+    RepositorioPostgres,
+)
 from app.api.rutas import _crear_router
 from app.auth import ServicioCredenciales, leer_secreto
 from app.domain.errores import (
@@ -59,11 +63,36 @@ def _crear_repositorio() -> RepositorioMemoria | RepositorioPostgres:
         return RepositorioMemoria()
 
 
+def _crear_credenciales() -> ServicioCredenciales:
+    """Credenciales sobre Postgres si hay DSN; memoria en caso contrario.
+
+    Si la tabla `credenciales` no puede crearse (BD inaccesible), degrada a
+    memoria con el mismo aviso del repositorio de dominio: la app arranca
+    igual y el cambio de contrasena no persiste hasta restablecer la BD.
+    """
+    dsn = os.environ.get("DATABASE_URL", "").strip()
+    if not dsn:
+        return ServicioCredenciales()
+    try:
+        repositorio = RepositorioCredencialesPostgres(dsn)
+        repositorio.crear_esquema()
+        return ServicioCredenciales(repositorio)
+    except Exception as exc:  # pragma: no cover - ruta de degradacion
+        logger.warning(
+            "Tabla de credenciales no disponible (%s); se usa memoria.", exc
+        )
+        return ServicioCredenciales()
+
+
 servicio = ServicioProyectos(_crear_repositorio())
 
-# Autenticacion (10.3, fase 14): credenciales en memoria + secreto de firma JWT.
-credenciales = ServicioCredenciales()
+# Autenticacion (10.3, fase 14): credenciales persistidas (14.5, tabla propia
+# con DATABASE_URL; memoria en fallback/tests) + secreto de firma JWT.
+credenciales = _crear_credenciales()
 secreto_auth = leer_secreto(logger)
+
+# El re-sync total (13.4) limpia credenciales de usuarios eliminados.
+servicio.asignar_credenciales(credenciales)
 
 app = FastAPI(
     title="ProjectHub API",

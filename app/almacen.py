@@ -41,6 +41,88 @@ _COLECCIONES: tuple[tuple[str, type, str], ...] = (
     ("bitacora", BitacoraEntrada, "b"),
 )
 
+# Fase 14.5: los hashes de contrasena viven en su propia tabla (correo ->
+# hash PBKDF2), fuera del protocolo de sincronizacion: nunca viajan al
+# frontend ni se exponen por la API. Clave = correo (el login busca por
+# correo); renombrar correo mueve la credencial (renombrar()).
+_TABLA_CREDENCIALES = "credenciales"
+
+
+class RepositorioCredencialesMemoria:
+    """Credenciales en memoria (fallback sin DATABASE_URL y tests)."""
+
+    def __init__(self) -> None:
+        self._hashes: dict[str, str] = {}
+
+    def listar(self) -> dict[str, str]:
+        return dict(self._hashes)
+
+    def guardar(self, correo: str, hash_contrasena: str) -> None:
+        self._hashes[correo] = hash_contrasena
+
+    def eliminar(self, correo: str) -> None:
+        self._hashes.pop(correo, None)
+
+    def eliminar_excepto(self, correos: set[str]) -> None:
+        for correo in [c for c in self._hashes if c not in correos]:
+            self._hashes.pop(correo, None)
+
+
+class RepositorioCredencialesPostgres:
+    """Credenciales en su tabla PostgreSQL (14.5): correo text PRIMARY KEY,
+    hash text NOT NULL. Contrato identico al repositorio en memoria; las
+    escrituras son upsert y transaccion propia por operacion."""
+
+    def __init__(self, dsn: str) -> None:
+        import psycopg
+
+        self._conn_lectura = psycopg.connect(dsn, autocommit=True)
+        self._conn_escritura = psycopg.connect(dsn)
+
+    def cerrar(self) -> None:
+        for conn in (self._conn_lectura, self._conn_escritura):
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def crear_esquema(self) -> None:
+        with self._conn_escritura.cursor() as cur:
+            cur.execute(
+                f'CREATE TABLE IF NOT EXISTS "{_TABLA_CREDENCIALES}" ('
+                "correo text PRIMARY KEY, hash text NOT NULL)"
+            )
+        self._conn_escritura.commit()
+
+    def listar(self) -> dict[str, str]:
+        with self._conn_lectura.cursor() as cur:
+            cur.execute(f'SELECT correo, hash FROM "{_TABLA_CREDENCIALES}" ORDER BY correo')
+            return {fila[0]: fila[1] for fila in cur.fetchall()}
+
+    def guardar(self, correo: str, hash_contrasena: str) -> None:
+        with self._conn_escritura.cursor() as cur:
+            cur.execute(
+                f'INSERT INTO "{_TABLA_CREDENCIALES}" (correo, hash) VALUES (%s, %s) '
+                "ON CONFLICT (correo) DO UPDATE SET hash = EXCLUDED.hash",
+                (correo, hash_contrasena),
+            )
+        self._conn_escritura.commit()
+
+    def eliminar(self, correo: str) -> None:
+        with self._conn_escritura.cursor() as cur:
+            cur.execute(f'DELETE FROM "{_TABLA_CREDENCIALES}" WHERE correo = %s', (correo,))
+        self._conn_escritura.commit()
+
+    def eliminar_excepto(self, correos: set[str]) -> None:
+        if not correos:
+            return
+        with self._conn_escritura.cursor() as cur:
+            cur.execute(
+                f'DELETE FROM "{_TABLA_CREDENCIALES}" WHERE NOT (correo = ANY(%s))',
+                (sorted(correos),),
+            )
+        self._conn_escritura.commit()
+
 
 class RepositorioMemoria:
     """Estado en memoria: listas vivas, identicas al comportamiento previo.

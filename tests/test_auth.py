@@ -192,3 +192,63 @@ def test_orden_activo_inactivo_en_login_error_primero():
     # responde 401 (credenciales), no 403.
     respuesta = _login("ivan@projecthub.local", "incorrecta")
     assert respuesta.status_code == 401
+
+
+# ---------- Cambio de contrasena (14.5) ----------
+
+
+def _bearer(token: str) -> dict:
+    return {"Authorization": "Bearer " + token}
+
+
+def test_cambio_contrasena_exitoso_y_persistente():
+    token = _login("diana@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
+    cambio = client.put(
+        "/api/auth/contrasena",
+        json={"contrasenaActual": CONTRASENA_DEMO_DEFAULT, "contrasenaNueva": "nueva-clave-145"},
+        headers=_bearer(token),
+    )
+    assert cambio.status_code == 200
+    assert cambio.json()["cambiada"] is True
+    # La nueva credencial verifica y la vieja ya no (persistio el upsert).
+    respuesta = _login("diana@projecthub.local", "nueva-clave-145")
+    assert respuesta.status_code == 200
+    respuesta = _login("diana@projecthub.local", CONTRASENA_DEMO_DEFAULT)
+    assert respuesta.status_code == 401
+    # Estado demo restaurado para el resto de la suite.
+    client.put(
+        "/api/auth/contrasena",
+        json={"contrasenaActual": "nueva-clave-145", "contrasenaNueva": CONTRASENA_DEMO_DEFAULT},
+        headers=_bearer(token),
+    )
+
+
+def test_cambio_contrasena_actual_incorrecta_responde_401():
+    token = _login("paula@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
+    cambio = client.put(
+        "/api/auth/contrasena",
+        json={"contrasenaActual": "no-es-mi-clave", "contrasenaNueva": "otra-clave-larga-1"},
+        headers=_bearer(token),
+    )
+    assert cambio.status_code == 401
+    assert cambio.json()["detail"]["codigo"] == "CONTRASENA_ACTUAL_INVALIDA"
+    # La credencial demo sigue vigente tras el rechazo.
+    assert _login("paula@projecthub.local", CONTRASENA_DEMO_DEFAULT).status_code == 200
+
+
+def test_cambio_contrasena_nueva_corta_responde_422():
+    token = _login("paula@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
+    cambio = client.put(
+        "/api/auth/contrasena",
+        json={"contrasenaActual": CONTRASENA_DEMO_DEFAULT, "contrasenaNueva": "corta"},
+        headers=_bearer(token),
+    )
+    assert cambio.status_code == 422
+
+
+def test_cambio_contrasena_requiere_sesion():
+    respuesta = client.put(
+        "/api/auth/contrasena",
+        json={"contrasenaActual": CONTRASENA_DEMO_DEFAULT, "contrasenaNueva": "otra-clave-larga-2"},
+    )
+    assert respuesta.status_code == 422
