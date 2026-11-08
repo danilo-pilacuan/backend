@@ -16,7 +16,8 @@ from app.domain.modelos import EtapaTrabajo
 from app.main import app
 from app.semilla import ETAPAS_SEMILLA
 
-client = TestClient(app)
+# Los GET de dominio exigen sesion (VULN-002): header por defecto de admin.
+client = TestClient(app, headers={"X-Actor-Id": "u-admin"})
 
 PM = "u-pm"
 PROYECTO_1 = "p1"

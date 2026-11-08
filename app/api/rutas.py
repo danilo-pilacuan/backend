@@ -1,9 +1,11 @@
 """Rutas REST (10.3): agregados de dominio como HTTP, contrato camelCase.
 
-El actor de la sesion simulada llega en el header X-Actor-Id (hasta 1.5/1.6
-de autenticacion real). Los codigos de ErrorDominio se mapean a HTTP en el
-handler global de main.py: 404 no encontrado, 409 conflicto de estado o
-permiso, 422 validacion.
+El actor llega en el header Authorization (****** prioridad) o en
+X-Actor-Id (compatibilidad con la sesion simulada). Todos los endpoints de
+dominio exigen sesion (mitigacion VULN-002, .ops/security/vulns.md); solo
+/api/salud y /api/auth/login son publicos. Los codigos de ErrorDominio se
+mapean a HTTP en el handler global de main.py: 404 no encontrado, 409
+conflicto de estado o permiso, 422 validacion.
 """
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -162,6 +164,7 @@ def _crear_router() -> APIRouter:
     @router.get("/api/usuarios")
     def listar_usuarios(
         solo_activos: bool = False,
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> list[dict]:
         fuente = servicio.usuarios_activos() if solo_activos else servicio.usuarios()
@@ -196,6 +199,7 @@ def _crear_router() -> APIRouter:
 
     @router.get("/api/proyectos")
     def listar_proyectos(
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> list[dict]:
         return [p.model_dump(by_alias=True) for p in servicio.proyectos()]
@@ -211,6 +215,7 @@ def _crear_router() -> APIRouter:
 
     @router.get("/api/proyectos/resumenes")
     def listar_resumenes(
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> list[dict]:
         return [_resumen_json(r) for r in servicio.resumenes()]
@@ -218,6 +223,7 @@ def _crear_router() -> APIRouter:
     @router.get("/api/proyectos/{proyecto_id}")
     def obtener_proyecto(
         proyecto_id: str,
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> dict:
         proyecto = servicio.proyecto_por_id(proyecto_id)
@@ -228,6 +234,7 @@ def _crear_router() -> APIRouter:
     @router.get("/api/proyectos/{proyecto_id}/resumen")
     def obtener_resumen(
         proyecto_id: str,
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> dict:
         return _resumen_json(servicio.resumen(proyecto_id))
@@ -235,6 +242,7 @@ def _crear_router() -> APIRouter:
     @router.get("/api/proyectos/{proyecto_id}/gate")
     def obtener_gate(
         proyecto_id: str,
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> dict:
         gate = servicio.gate_actual(proyecto_id)
@@ -308,6 +316,7 @@ def _crear_router() -> APIRouter:
     @router.get("/api/proyectos/{proyecto_id}/etapas")
     def listar_etapas(
         proyecto_id: str,
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> list[dict]:
         return [e.model_dump(by_alias=True) for e in servicio.etapas_de_proyecto(proyecto_id)]
@@ -371,6 +380,7 @@ def _crear_router() -> APIRouter:
     @router.get("/api/proyectos/{proyecto_id}/entregables")
     def listar_entregables(
         proyecto_id: str,
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> list[dict]:
         return [e.model_dump(by_alias=True) for e in servicio.entregables_de_proyecto(proyecto_id)]
@@ -400,6 +410,7 @@ def _crear_router() -> APIRouter:
     @router.get("/api/proyectos/{proyecto_id}/bitacora")
     def listar_bitacora(
         proyecto_id: str,
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> list[dict]:
         return [b.model_dump(by_alias=True) for b in servicio.bitacora_de_proyecto(proyecto_id)]
@@ -408,18 +419,21 @@ def _crear_router() -> APIRouter:
 
     @router.get("/api/etapas")
     def listar_todas_las_etapas(
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> list[dict]:
         return [e.model_dump(mode="json", by_alias=True) for e in servicio.etapas()]
 
     @router.get("/api/entregables")
     def listar_todos_los_entregables(
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> list[dict]:
         return [e.model_dump(mode="json", by_alias=True) for e in servicio.entregables()]
 
     @router.get("/api/bitacora")
     def listar_toda_la_bitacora(
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> list[dict]:
         return [b.model_dump(mode="json", by_alias=True) for b in servicio.bitacora()]
@@ -428,6 +442,7 @@ def _crear_router() -> APIRouter:
 
     @router.get("/api/sincronizacion")
     def leer_estado(
+        actor: Usuario = Depends(obtener_actor),
         servicio: ServicioProyectos = Depends(obtener_servicio),
     ) -> dict:
         """Estado completo del dominio para el bootstrap de los stores."""

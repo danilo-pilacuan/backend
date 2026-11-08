@@ -12,7 +12,10 @@ from app.auth import (
 )
 from app.main import app, secreto_auth
 
-client = TestClient(app)
+# GET/PUT de dominio exigen sesion (VULN-002): header por defecto de admin.
+# Los tests anonimos usan el cliente anon (sin headers).
+client = TestClient(app, headers={"X-Actor-Id": "u-admin"})
+anon = TestClient(app)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -127,7 +130,7 @@ def test_me_con_token_devuelve_usuario():
 
 
 def test_me_sin_token_responde_422_validacion():
-    respuesta = client.get("/api/auth/me")
+    respuesta = anon.get("/api/auth/me")
     assert respuesta.status_code == 422
     assert respuesta.json()["codigo"] == "VALIDACION"
 
@@ -243,7 +246,7 @@ def test_cambio_contrasena_nueva_corta_responde_422():
 
 
 def test_cambio_contrasena_requiere_sesion():
-    respuesta = client.put(
+    respuesta = anon.put(
         "/api/auth/contrasena",
         json={"contrasenaActual": CONTRASENA_DEMO_DEFAULT, "contrasenaNueva": "otra-clave-larga-2"},
     )

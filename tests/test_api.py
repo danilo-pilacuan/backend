@@ -12,6 +12,12 @@ ADMIN = "u-admin"
 ANALISTA = "u-analista"
 PROYECTO_1 = "p1"
 
+# Los GET de dominio exigen sesion (VULN-002). El header por defecto del
+# cliente mantiene el resto de la suite en el contrato con sesion; los tests
+# de auth y de peticion anonima usan el cliente anon o sobreescriben.
+client = TestClient(app, headers={"X-Actor-Id": ADMIN})
+anon = TestClient(app)
+
 
 def _post(url: str, json: dict | None = None, actor: str = PM):
     return client.post(url, json=json if json is not None else {}, headers={"X-Actor-Id": actor})
@@ -50,7 +56,7 @@ def test_resumen_calculado_en_servidor():
 
 
 def test_sin_actor_responde_422():
-    respuesta = client.post("/api/proyectos", json={"nombre": "X"})
+    respuesta = anon.post("/api/proyectos", json={"nombre": "X"})
     assert respuesta.status_code == 422
     assert respuesta.json()["codigo"] == "VALIDACION"
 
@@ -276,7 +282,7 @@ def test_escribir_estado_roundtrip_camellcase():
 
 def test_escribir_estado_sin_actor_responde_422():
     estado = client.get("/api/sincronizacion").json()
-    respuesta = client.put("/api/sincronizacion", json=estado)
+    respuesta = anon.put("/api/sincronizacion", json=estado)
     assert respuesta.status_code == 422
 
 
@@ -310,16 +316,21 @@ def test_escribir_estado_entidad_invalida_responde_422():
 # ---------- Seguridad: hallazgos documentados (.ops/security/vulns.md) ----------
 
 
-def test_vuln002_lecturas_de_dominio_sin_sesion_responden_200():
-    """VULN-002 (Media, abierto): los GET de dominio no exigen sesion.
+def test_vuln002_mitigado_lecturas_de_dominio_exigen_sesion():
+    """VULN-002 mitigada (2026-11-08): los GET de dominio exigen sesion.
 
-    Test de caracterizacion: documenta el comportamiento actual y fallara
-    cuando se mitigue (exigir obtener_actor), recordando auditar a los
-    consumidores del frontend en el mismo cambio.
+    Sin token ni X-Actor-Id la API responde 422 VALIDACION; solo /api/salud
+    y /api/auth/login quedan publicos. Con sesion (X-Actor-Id) siguen
+    respondiendo 200 (contrato del modo demo conservado).
     """
     for ruta in ("/api/usuarios", "/api/proyectos", "/api/etapas", "/api/entregables", "/api/bitacora"):
-        respuesta = client.get(ruta)
-        assert respuesta.status_code == 200, f"{ruta} ya exige sesion: actualizar VULN-002 y los consumidores"
+        sin_sesion = anon.get(ruta)
+        assert sin_sesion.status_code == 422, f"{ruta} sigue publica: revertir mitigacion VULN-002"
+        assert sin_sesion.json()["codigo"] == "VALIDACION"
+        con_sesion = client.get(ruta, headers={"X-Actor-Id": ADMIN})
+        assert con_sesion.status_code == 200, f"{ruta} rompio el contrato con sesion"
+    # La ruta de detalle tambien queda protegida.
+    assert anon.get("/api/proyectos/no-existe").status_code == 422
 
 
 def test_vuln001_put_sincronizacion_escalada_de_roles_sin_validacion():
