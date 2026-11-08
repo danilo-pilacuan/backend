@@ -5,3 +5,5 @@ pytest>=8.0
 psycopg[binary]>=3.2
 python-dotenv>=1.0
 pyjwt>=2.8
+
+ruff>=0.17

@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from .catalogos import Acciones, EtapasCicloVida, EstadoProyecto, Roles
+from .catalogos import Acciones, EstadoProyecto, EtapasCicloVida, Roles
 
 
 def _alias_camel_case(nombre: str) -> str:

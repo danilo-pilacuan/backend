@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
 
 from .domain.modelos import (
     BitacoraEntrada,
@@ -89,8 +89,7 @@ class RepositorioCredencialesPostgres:
     def crear_esquema(self) -> None:
         with self._conn_escritura.cursor() as cur:
             cur.execute(
-                f'CREATE TABLE IF NOT EXISTS "{_TABLA_CREDENCIALES}" ('
-                "correo text PRIMARY KEY, hash text NOT NULL)"
+                f'CREATE TABLE IF NOT EXISTS "{_TABLA_CREDENCIALES}" (correo text PRIMARY KEY, hash text NOT NULL)'
             )
         self._conn_escritura.commit()
 
@@ -232,10 +231,7 @@ class RepositorioPostgres:
         """CREATE TABLE IF NOT EXISTS por coleccion (idempotente)."""
         with self._conn_escritura.cursor() as cur:
             for nombre, _modelo, _prefijo in _COLECCIONES:
-                cur.execute(
-                    f'CREATE TABLE IF NOT EXISTS "{nombre}" ('
-                    'id text PRIMARY KEY, datos jsonb NOT NULL)'
-                )
+                cur.execute(f'CREATE TABLE IF NOT EXISTS "{nombre}" (id text PRIMARY KEY, datos jsonb NOT NULL)')
         self._conn_escritura.commit()
 
     def cargar_semilla(self) -> None:
@@ -303,8 +299,8 @@ class RepositorioPostgres:
         datos = entidad.model_dump(mode="json", by_alias=True)  # type: ignore[union-attr]
         with self._conn_escritura.cursor() as cur:
             cur.execute(
-                'INSERT INTO "{0}" (id, datos) VALUES (%s, %s) '
-                "ON CONFLICT (id) DO UPDATE SET datos = EXCLUDED.datos".format(nombre),
+                f'INSERT INTO "{nombre}" (id, datos) VALUES (%s, %s) '
+                "ON CONFLICT (id) DO UPDATE SET datos = EXCLUDED.datos",
                 (entidad.id, json.dumps(datos)),  # type: ignore[attr-defined]
             )
         self._conn_escritura.commit()

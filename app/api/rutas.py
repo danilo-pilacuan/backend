@@ -13,12 +13,11 @@ from app.auth import (
     contrasena_demo,
     crear_token,
     extraer_bearer,
-    leer_secreto,
     leer_token,
 )
 from app.domain.errores import ErrorEntidadNoEncontrada, ErrorValidacion
 from app.domain.modelos import Usuario
-from app.servicio import ServicioProyectos, ResumenProyecto
+from app.servicio import ResumenProyecto, ServicioProyectos
 
 from .esquemas import (
     CuerpoAvance,

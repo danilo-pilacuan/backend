@@ -289,7 +289,7 @@ def test_avance_libre_sin_dependencias():
     e3 = next(e for e in etapas if e["id"] == "e3")
     assert e3["dependencias"] == []
     respuesta = client.post(
-        f"/api/etapas/e3/avance",
+        "/api/etapas/e3/avance",
         json={"avance": 25},
         headers={"X-Actor-Id": PM},
     )

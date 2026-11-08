@@ -78,9 +78,7 @@ def test_token_con_secreto_distinto_es_rechazado():
 
 
 def test_token_expirado_es_rechazado():
-    token = pyjwt.encode(
-        {"sub": "u-admin", "exp": 1}, secreto_auth, algorithm="HS256"
-    )
+    token = pyjwt.encode({"sub": "u-admin", "exp": 1}, secreto_auth, algorithm="HS256")
     assert leer_token(token, secreto_auth) is None
 
 
@@ -135,9 +133,7 @@ def test_me_sin_token_responde_422_validacion():
 
 
 def test_token_invalido_en_ruta_protegida_responde_422():
-    respuesta = client.get(
-        "/api/auth/me", headers={"Authorization": "Bearer no-es-un-jwt"}
-    )
+    respuesta = client.get("/api/auth/me", headers={"Authorization": "Bearer no-es-un-jwt"})
     assert respuesta.status_code == 422
     assert "invalido" in respuesta.json()["mensaje"]
 

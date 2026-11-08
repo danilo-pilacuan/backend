@@ -1,4 +1,4 @@
-﻿"""Pruebas de la capa de persistencia (DEC-006).
+"""Pruebas de la capa de persistencia (DEC-006).
 
 Cubren RepositorioMemoria (default sin DATABASE_URL) y, si Docker tiene
 Postgres en localhost:5433 con la BD efimera projecthub_test, el roundtrip
@@ -6,25 +6,20 @@ completo de RepositorioPostgres: esquema, semilla idempotente, agregados y
 reemplazos. Si Postgres no esta disponible los tests de roundtrip se saltan.
 """
 
-import json
 import os
 
 import pytest
 
 from app.almacen import RepositorioMemoria, RepositorioPostgres
+from app.domain.modelos import (
+    Usuario,
+)
 from app.semilla import (
     BITACORA_SEMILLA,
     ENTREGABLES_SEMILLA,
     ETAPAS_SEMILLA,
     PROYECTOS_SEMILLA,
     USUARIOS_SEMILLA,
-)
-from app.domain.modelos import (
-    BitacoraEntrada,
-    Entregable,
-    EtapaTrabajo,
-    Proyecto,
-    Usuario,
 )
 
 DSN_TEST = os.environ.get(
@@ -44,9 +39,7 @@ def _hay_postgres() -> bool:
         return False
 
 
-NECESITA_POSTGRES = pytest.mark.skipif(
-    not _hay_postgres(), reason="PostgreSQL no disponible en localhost:5433"
-)
+NECESITA_POSTGRES = pytest.mark.skipif(not _hay_postgres(), reason="PostgreSQL no disponible en localhost:5433")
 
 
 # ---------- RepositorioMemoria ----------
@@ -144,15 +137,9 @@ def test_pg_cargar_semilla_idempotente() -> None:
         repo._reemplazar_todo(nombre, [])
 
     repo.cargar_semilla()
-    total1 = sum(
-        len(repo._leer_todos(n))
-        for n in ("usuarios", "proyectos", "etapas", "entregables", "bitacora")
-    )
+    total1 = sum(len(repo._leer_todos(n)) for n in ("usuarios", "proyectos", "etapas", "entregables", "bitacora"))
     repo.cargar_semilla()
-    total2 = sum(
-        len(repo._leer_todos(n))
-        for n in ("usuarios", "proyectos", "etapas", "entregables", "bitacora")
-    )
+    total2 = sum(len(repo._leer_todos(n)) for n in ("usuarios", "proyectos", "etapas", "entregables", "bitacora"))
     assert total1 == total2
     assert len(repo.usuarios()) == len(USUARIOS_SEMILLA)
 

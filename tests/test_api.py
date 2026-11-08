@@ -267,9 +267,7 @@ def test_leer_estado_devuelve_las_cinco_colecciones():
 def test_escribir_estado_roundtrip_camellcase():
     estado = client.get("/api/sincronizacion").json()
     estado["proyectos"][0]["nombre"] = "Renombrado via sincronizacion"
-    respuesta = client.put(
-        "/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM}
-    )
+    respuesta = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM})
     assert respuesta.status_code == 200
     verificado = client.get("/api/sincronizacion").json()
     assert verificado["proyectos"][0]["nombre"] == "Renombrado via sincronizacion"
@@ -285,9 +283,7 @@ def test_escribir_estado_sin_actor_responde_422():
 def test_escribir_estado_coleccion_invalida_responde_422():
     estado = client.get("/api/sincronizacion").json()
     estado["proyectos"] = "no-soy-una-lista"
-    respuesta = client.put(
-        "/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM}
-    )
+    respuesta = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM})
     assert respuesta.status_code == 422
     assert respuesta.json()["codigo"] == "VALIDACION"
 
@@ -295,9 +291,7 @@ def test_escribir_estado_coleccion_invalida_responde_422():
 def test_escribir_estado_ids_duplicados_responde_422():
     estado = client.get("/api/sincronizacion").json()
     estado["proyectos"].append(dict(estado["proyectos"][0]))
-    respuesta = client.put(
-        "/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM}
-    )
+    respuesta = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM})
     assert respuesta.status_code == 422
     assert "duplicados" in respuesta.json()["mensaje"]
 
@@ -305,9 +299,7 @@ def test_escribir_estado_ids_duplicados_responde_422():
 def test_escribir_estado_entidad_invalida_responde_422():
     estado = client.get("/api/sincronizacion").json()
     estado["proyectos"][0]["etapa"] = "EtapaInexistente"
-    respuesta = client.put(
-        "/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM}
-    )
+    respuesta = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM})
     assert respuesta.status_code == 422
     assert respuesta.json()["codigo"] == "VALIDACION"
 
@@ -356,4 +348,3 @@ def test_colecciones_planas_coinciden_con_sincronizacion():
         ids_plana = sorted(e["id"] for e in plana)
         ids_sincro = sorted(e["id"] for e in sincro[clave])
         assert ids_plana == ids_sincro, f"{ruta} no coincide con sincronizacion.{clave}"
-

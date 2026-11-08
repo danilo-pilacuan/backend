@@ -57,9 +57,7 @@ def _crear_repositorio() -> RepositorioMemoria | RepositorioPostgres:
         logger.info("Persistencia PostgreSQL activa (DATABASE_URL).")
         return repositorio
     except Exception as exc:  # pragma: no cover - ruta de degradacion
-        logger.warning(
-            "PostgreSQL no disponible (%s); se usa RepositorioMemoria.", exc
-        )
+        logger.warning("PostgreSQL no disponible (%s); se usa RepositorioMemoria.", exc)
         return RepositorioMemoria()
 
 
@@ -78,9 +76,7 @@ def _crear_credenciales() -> ServicioCredenciales:
         repositorio.crear_esquema()
         return ServicioCredenciales(repositorio)
     except Exception as exc:  # pragma: no cover - ruta de degradacion
-        logger.warning(
-            "Tabla de credenciales no disponible (%s); se usa memoria.", exc
-        )
+        logger.warning("Tabla de credenciales no disponible (%s); se usa memoria.", exc)
         return ServicioCredenciales()
 
 

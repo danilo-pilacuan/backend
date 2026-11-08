@@ -68,7 +68,7 @@ def verificar_contrasena(contrasena: str, almacenado: str) -> bool:
             int(iteraciones),
         )
         return hmac.compare_digest(derivado.hex(), hash_hex)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return False
 
 
@@ -111,9 +111,7 @@ class ServicioCredenciales:
         if not verificar_contrasena(contrasena_actual, almacenado):
             return False
         if not contrasena_valida(contrasena_nueva):
-            raise ErrorValidacion(
-                f"La contrasena nueva debe tener al menos {LONGITUD_MINIMA_CONTRASENA} caracteres."
-            )
+            raise ErrorValidacion(f"La contrasena nueva debe tener al menos {LONGITUD_MINIMA_CONTRASENA} caracteres.")
         self._repositorio.guardar(correo, hash_contrasena(contrasena_nueva))
         return True
 
@@ -139,8 +137,7 @@ def leer_secreto(log: object) -> str:
     if secreto:
         return secreto
     log.warning(  # type: ignore[attr-defined]
-        "AUTH_SECRET no definida: se genera un secreto efimero; "
-        "los tokens no sobreviviran al reinicio del servicio."
+        "AUTH_SECRET no definida: se genera un secreto efimero; los tokens no sobreviviran al reinicio del servicio."
     )
     return secrets.token_hex(32)
 

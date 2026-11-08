@@ -10,8 +10,8 @@ from app.domain.calculos import (
     validar_etapa,
 )
 from app.domain.ciclo_vida import (
-    etapa_retroceso_permitido,
     es_transicion_valida,
+    etapa_retroceso_permitido,
     siguiente_etapa,
     transiciones_disponibles,
     validar_transicion,
@@ -25,8 +25,8 @@ from app.domain.errores import (
 from app.domain.gates import ENTREGABLES_OBLIGATORIOS, evaluar_gate, validar_aprobacion
 from app.domain.matriz_permisos import roles_permitidos, tiene_permiso
 from app.domain.modelos import Entregable
-from app.servicio import ServicioProyectos
 from app.semilla import USUARIOS_SEMILLA
+from app.servicio import ServicioProyectos
 
 
 def _usuario(rol: str):

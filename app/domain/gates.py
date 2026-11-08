@@ -53,8 +53,6 @@ def validar_aprobacion(entregable: Entregable, aprobador_id: str) -> None:
     """Caso limite del rulebook: el autor no aprueba su propio documento y un
     entregable ya aprobado no se reaprueba."""
     if entregable.aprobado_por_id is not None:
-        raise ErrorValidacion(
-            f'El entregable "{entregable.nombre}" ya fue aprobado y no admite otra aprobacion.'
-        )
+        raise ErrorValidacion(f'El entregable "{entregable.nombre}" ya fue aprobado y no admite otra aprobacion.')
     if entregable.creado_por_id == aprobador_id:
         raise ErrorValidacion("El autor de un entregable no puede aprobar su propio documento.")

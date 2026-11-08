@@ -10,14 +10,11 @@ cuando main.py recibe DATABASE_URL (DEC-006). El servicio nunca toca SQL.
 import itertools
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, ValidationError
 
 from .almacen import RepositorioMemoria, RepositorioPostgres
-
-logger = logging.getLogger("projecthub")
-
 from .domain.calculos import (
     avance_ponderado,
     consumo_total,
@@ -25,7 +22,7 @@ from .domain.calculos import (
     presupuesto_total,
     validar_etapa,
 )
-from .domain.catalogos import Acciones, EtapasCicloVida, EstadoProyecto, Roles
+from .domain.catalogos import Acciones, EstadoProyecto, EtapasCicloVida, Roles
 from .domain.ciclo_vida import _INDICE_ETAPA, validar_transicion
 from .domain.dependencias import (
     dependientes_de,
@@ -43,12 +40,10 @@ from .domain.gates import EstadoGate, evaluar_gate, validar_aprobacion
 from .domain.matriz_permisos import exigir_permiso
 from .domain.modelos import BitacoraEntrada, Entregable, EtapaTrabajo, Proyecto, Usuario
 from .semilla import (
-    BITACORA_SEMILLA,
-    ENTREGABLES_SEMILLA,
-    ETAPAS_SEMILLA,
-    PROYECTOS_SEMILLA,
     USUARIOS_SEMILLA,
 )
+
+logger = logging.getLogger("projecthub")
 
 _CORREO_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
@@ -56,7 +51,7 @@ _contador = itertools.count(1)
 
 
 def nuevo_id(prefijo: str) -> str:
-    return f"{prefijo}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{next(_contador)}"
+    return f"{prefijo}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{next(_contador)}"
 
 
 class ResumenProyecto(BaseModel):
@@ -235,9 +230,7 @@ class ServicioProyectos:
         self._etapas = etapas
         self._entregables = entregables
         self._bitacora = bitacora
-        logger.info(
-            "Estado sincronizado por el actor %s (%d proyectos).", actor_id, len(proyectos)
-        )
+        logger.info("Estado sincronizado por el actor %s (%d proyectos).", actor_id, len(proyectos))
         from .auth import ServicioCredenciales
 
         credenciales: ServicioCredenciales | None = getattr(self, "_credenciales", None)
@@ -297,9 +290,7 @@ class ServicioProyectos:
             cambios = {**cambios, "nombre": nombre}
         permitidos = ("nombre", "descripcion", "fecha_objetivo")
         filtrados = {k: v for k, v in cambios.items() if k in permitidos and v is not None}
-        self._proyectos = [
-            p if p.id != proyecto_id else p.model_copy(update=filtrados) for p in self._proyectos
-        ]
+        self._proyectos = [p if p.id != proyecto_id else p.model_copy(update=filtrados) for p in self._proyectos]
         self._registrar_bitacora(
             proyecto_id=proyecto_id,
             autor_id=actor.id,
@@ -313,13 +304,10 @@ class ServicioProyectos:
         if proyecto.estado == "Cerrado":
             raise ErrorEstadoProyecto("Un proyecto cerrado es de solo lectura.")
         if proyecto.etapa == "Cierre":
-            raise ErrorEstadoProyecto(
-                "No se puede cancelar un proyecto en etapa Cierre; use cerrar proyecto."
-            )
+            raise ErrorEstadoProyecto("No se puede cancelar un proyecto en etapa Cierre; use cerrar proyecto.")
         exigir_permiso(proyecto.etapa, "cancelarProyecto", actor.roles)
         self._proyectos = [
-            p if p.id != proyecto_id else p.model_copy(update={"estado": "Cancelado"})
-            for p in self._proyectos
+            p if p.id != proyecto_id else p.model_copy(update={"estado": "Cancelado"}) for p in self._proyectos
         ]
         self._registrar_bitacora(
             proyecto_id=proyecto_id,
@@ -337,8 +325,7 @@ class ServicioProyectos:
             raise ErrorEstadoProyecto("El proyecto ya esta cerrado.")
         exigir_permiso("Cierre", "cerrarProyecto", actor.roles)
         self._proyectos = [
-            p if p.id != proyecto_id else p.model_copy(update={"estado": "Cerrado"})
-            for p in self._proyectos
+            p if p.id != proyecto_id else p.model_copy(update={"estado": "Cerrado"}) for p in self._proyectos
         ]
         self._registrar_bitacora(
             proyecto_id=proyecto_id,
@@ -357,14 +344,10 @@ class ServicioProyectos:
         proyecto = self._exigir_proyecto(proyecto_id)
         self._exigir_actor_valido(actor)
         if proyecto.estado != "Activo":
-            raise ErrorEstadoProyecto(
-                f"Un proyecto {proyecto.estado.lower()} no admite transiciones."
-            )
+            raise ErrorEstadoProyecto(f"Un proyecto {proyecto.estado.lower()} no admite transiciones.")
         validar_transicion(proyecto.etapa, destino)
         accion: Acciones = (
-            "retrocederEtapa"
-            if _INDICE_ETAPA[destino] < _INDICE_ETAPA[proyecto.etapa]
-            else "avanzarEtapa"
+            "retrocederEtapa" if _INDICE_ETAPA[destino] < _INDICE_ETAPA[proyecto.etapa] else "avanzarEtapa"
         )
         exigir_permiso(proyecto.etapa, accion, actor.roles)
         gate = evaluar_gate(proyecto.etapa, self.entregables_de_proyecto(proyecto_id))
@@ -374,8 +357,7 @@ class ServicioProyectos:
                 f"entregable(s) y hay {len(gate.pendientes_aprobacion)} sin aprobar."
             )
         self._proyectos = [
-            p if p.id != proyecto_id else p.model_copy(update={"etapa": destino})
-            for p in self._proyectos
+            p if p.id != proyecto_id else p.model_copy(update={"etapa": destino}) for p in self._proyectos
         ]
         self._registrar_bitacora(
             proyecto_id=proyecto_id,
@@ -452,8 +434,7 @@ class ServicioProyectos:
         if dependientes:
             nombres = ", ".join(d.nombre for d in dependientes)
             raise ErrorValidacion(
-                'No se puede eliminar la etapa "%s": las etapas %s dependen de ella.'
-                % (etapa.nombre, nombres)
+                f'No se puede eliminar la etapa "{etapa.nombre}": las etapas {nombres} dependen de ella.'
             )
         self._etapas = [e for e in self._etapas if e.id != etapa_id]
 
@@ -465,9 +446,7 @@ class ServicioProyectos:
         exigir_permiso(proyecto.etapa, "editarEtapaTrabajo", actor.roles)
         candidata = etapa.model_copy(update={"avance": avance})
         self._validar_datos_etapa(candidata)
-        exigir_dependencias_completas(
-            candidata, avance, self._etapas_del_proyecto_local(proyecto.id, candidata)
-        )
+        exigir_dependencias_completas(candidata, avance, self._etapas_del_proyecto_local(proyecto.id, candidata))
         self._etapas = [e if e.id != etapa_id else candidata for e in self._etapas]
 
     def registrar_consumo(self, etapa_id: str, consumo: float, actor: Usuario) -> None:
@@ -479,8 +458,7 @@ class ServicioProyectos:
         if isinstance(consumo, bool) or not isinstance(consumo, (int, float)) or consumo < 0:
             raise ErrorValidacion("El consumo no puede ser negativo.")
         self._etapas = [
-            e if e.id != etapa_id else e.model_copy(update={"presupuesto_consumido": consumo})
-            for e in self._etapas
+            e if e.id != etapa_id else e.model_copy(update={"presupuesto_consumido": consumo}) for e in self._etapas
         ]
 
     # ---------- Entregables y gate ----------
@@ -513,7 +491,7 @@ class ServicioProyectos:
         self._exigir_estado_editable(proyecto.estado, "aprobar entregables")
         exigir_permiso(entregable.etapa, "aprobarEntregable", actor.roles)
         validar_aprobacion(entregable, actor.id)
-        aprobado_en = datetime.now(timezone.utc).isoformat()
+        aprobado_en = datetime.now(UTC).isoformat()
         self._entregables = [
             e
             if e.id != entregable_id
@@ -574,9 +552,7 @@ class ServicioProyectos:
         self._usuarios = [
             u
             if u.id != usuario_id
-            else u.model_copy(
-                update={"nombre": nombre, "correo": correo, "roles": roles, "activo": activo}
-            )
+            else u.model_copy(update={"nombre": nombre, "correo": correo, "roles": roles, "activo": activo})
             for u in self._usuarios
         ]
 
@@ -649,9 +625,7 @@ class ServicioProyectos:
             proyectadas.append(candidata)
         validar_dependencias(candidata.id, candidata.proyecto_id, proyectadas)
 
-    def _etapas_del_proyecto_local(
-        self, proyecto_id: str, candidata: EtapaTrabajo
-    ) -> list[EtapaTrabajo]:
+    def _etapas_del_proyecto_local(self, proyecto_id: str, candidata: EtapaTrabajo) -> list[EtapaTrabajo]:
         # En edicion la candidata sustituye a la existente; en creacion (id
         # nuevo) se agrega. Cubre ambos casos como _validar_dependencias_candidata.
         resto = [e for e in self._etapas if e.proyecto_id == proyecto_id and e.id != candidata.id]
@@ -696,7 +670,7 @@ class ServicioProyectos:
                 id=nuevo_id("b"),
                 proyecto_id=proyecto_id,
                 autor_id=autor_id,
-                fecha=datetime.now(timezone.utc).isoformat(),
+                fecha=datetime.now(UTC).isoformat(),
                 tipo=tipo,  # type: ignore[arg-type]
                 etapa_origen=etapa_origen,
                 etapa_destino=etapa_destino,

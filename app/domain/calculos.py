@@ -36,7 +36,13 @@ def validar_etapa(
     presupuesto_consumido: float,
 ) -> None:
     duracion_dias(fecha_inicio, fecha_fin)
-    if not isinstance(avance, (int, float)) or isinstance(avance, bool) or not math.isfinite(avance) or avance < 0 or avance > 100:
+    if (
+        not isinstance(avance, (int, float))
+        or isinstance(avance, bool)
+        or not math.isfinite(avance)
+        or avance < 0
+        or avance > 100
+    ):
         raise ErrorValidacion("El avance de la etapa debe estar entre 0 y 100.")
     for monto, mensaje in (
         (presupuesto_asignado, "El presupuesto asignado no puede ser negativo."),

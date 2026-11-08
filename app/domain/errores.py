@@ -16,9 +16,7 @@ class ErrorTransicionInvalida(ErrorDominio):
     codigo = "TRANSICION_INVALIDA"
 
     def __init__(self, origen: str, destino: str) -> None:
-        super().__init__(
-            f'Transicion invalida: no se puede pasar de "{origen}" a "{destino}".'
-        )
+        super().__init__(f'Transicion invalida: no se puede pasar de "{origen}" a "{destino}".')
 
 
 class ErrorPermisoDenegado(ErrorDominio):
