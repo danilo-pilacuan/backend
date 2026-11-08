@@ -208,6 +208,47 @@ def test_token_de_usuario_eliminado_responde_401_sesion_invalida():
     assert after.json()["detail"]["codigo"] == "SESION_INVALIDA"
 
 
+def test_token_de_usuario_desactivado_responde_403_usuario_inactivo():
+    # Caso 14.7: token firmado y vigente cuyo usuario fue desactivado por un
+    # Admin en pleno uso. La identidad es conocida (no 401 SESION_INVALIDA):
+    # responde 403 USUARIO_INACTIVO con mensaje accionable. Autocontenido:
+    # crea su propio usuario para no depender del orden de la suite.
+    admin_token = _login("diana@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
+    creada = client.post(
+        "/api/usuarios",
+        json={
+            "nombre": "Usuario Desactivable",
+            "correo": "desactivable@projecthub.local",
+            "roles": ["Analista"],
+            "activo": True,
+        },
+        headers=_bearer(admin_token),
+    )
+    assert creada.status_code == 201
+    token = _login("desactivable@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
+    me_antes = client.get("/api/auth/me", headers=_bearer(token))
+    assert me_antes.status_code == 200
+    usuarios = client.get("/api/usuarios").json()
+    objetivo = next(u for u in usuarios if u["correo"] == "desactivable@projecthub.local")
+    objetivo["activo"] = False
+    sincronizar = client.put(
+        "/api/sincronizacion",
+        json={
+            "usuarios": usuarios,
+            "proyectos": [],
+            "etapas": [],
+            "entregables": [],
+            "bitacora": [],
+        },
+        headers=_bearer(admin_token),
+    )
+    assert sincronizar.status_code == 200
+    after = client.get("/api/auth/me", headers=_bearer(token))
+    assert after.status_code == 403
+    assert after.json()["detail"]["codigo"] == "USUARIO_INACTIVO"
+    assert "desactivada" in after.json()["detail"]["mensaje"]
+
+
 def test_token_de_usuario_eliminado_responde_404():
     # Ruta de compatibilidad X-Actor-Id: sin token que resolver, un id de
     # usuario inexistente sigue siendo entidad no encontrada (404).

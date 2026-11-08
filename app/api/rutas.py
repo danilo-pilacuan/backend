@@ -91,6 +91,19 @@ def obtener_actor(
                     "mensaje": "Tu usuario ya no existe en el sistema; inicia sesion de nuevo.",
                 },
             )
+        if not actor.activo:
+            # Token valido y usuario existente pero desactivado por un Admin
+            # en pleno uso (14.7): la identidad es conocida, no expirada; el
+            # token queda inservible hasta que la cuenta vuelva a activarse.
+            # 403 con codigo propio distingue este caso del 401 y permite a
+            # la UI avisar sin tratarlo como sesion expirada.
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "codigo": "USUARIO_INACTIVO",
+                    "mensaje": "Tu cuenta fue desactivada; contacta a un administrador.",
+                },
+            )
         return actor
     if not x_actor_id:
         raise ErrorValidacion("Falta autenticar la sesion (Bearer token o X-Actor-Id).")
