@@ -199,7 +199,13 @@ def test_token_de_usuario_eliminado_responde_401_sesion_invalida():
     restantes = [u for u in usuarios if u["correo"] != "efimero@projecthub.local"]
     sincronizar = client.put(
         "/api/sincronizacion",
-        json={"usuarios": restantes, "proyectos": [], "etapas": [], "entregables": [], "bitacora": []},
+        json={
+            "usuarios": restantes,
+            "proyectos": [],
+            "etapas": [],
+            "entregables": [],
+            "bitacora": client.get("/api/bitacora").json(),
+        },
         headers=_bearer(admin_token),
     )
     assert sincronizar.status_code == 200
@@ -238,7 +244,7 @@ def test_token_de_usuario_desactivado_responde_403_usuario_inactivo():
             "proyectos": [],
             "etapas": [],
             "entregables": [],
-            "bitacora": [],
+            "bitacora": client.get("/api/bitacora").json(),
         },
         headers=_bearer(admin_token),
     )

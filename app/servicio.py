@@ -210,10 +210,18 @@ class ServicioProyectos:
         Validacion de permisos sobre el diff (mitigacion VULN-001): solo un
         Admin puede alterar la coleccion de usuarios (crear, eliminar o
         cambiar roles/activo/correo/nombre); los actores sin Admin solo
-        pueden empujar el mismo set de usuarios que ya existe. El resto de
-        colecciones (proyectos/etapas/entregables/bitacora) se acepta como
-        hoy: su gobierno sigue siendo el empuje post-mutacion de una
-        escritura ya validada por caso de uso.
+        pueden empujar el mismo set de usuarios que ya existe.
+
+        Colecciones de gobierno (proyectos/etapas/entregables): reemplazo
+        directo, gobierno por empuje post-mutacion de escrituras ya
+        validadas por caso de uso.
+
+        La bitacora es invariable (regla 3.5): el re-sync la trata como
+        append-only. Las entradas entrantes se fusionan con las vigentes por
+        id; una entrada ya existente nunca se borra ni se modifica (3.5), y
+        toda entrada nueva debe tener autorId == actor_id del re-sync (la
+        bitacora solo crece por acciones propias, no por empuje de pares ni
+        de un Admin que "escribe" por otro). Ver _fusionar_bitacora.
         """
         claves = {"usuarios", "proyectos", "etapas", "entregables", "bitacora"}
         for clave in claves:
@@ -235,6 +243,7 @@ class ServicioProyectos:
             raise ErrorValidacion(f"Entidad invalida en el estado: {exc}") from exc
         self._validar_ultimo_admin_activo(usuarios)
         self._validar_diff_usuarios(usuarios, actor_id)
+        bitacora = self._fusionar_bitacora(bitacora, actor_id)
         self._usuarios = usuarios
         self._proyectos = proyectos
         self._etapas = etapas
@@ -247,6 +256,50 @@ class ServicioProyectos:
         if credenciales is not None:
             credenciales.sincronizar_con_usuarios({u.correo for u in usuarios})
         return self.estado_completo()
+
+    def _fusionar_bitacora(
+        self, entrantes: list[BitacoraEntrada], actor_id: str
+    ) -> list[BitacoraEntrada]:
+        """Fusiona el re-sync de bitacora (3.5 invariante, VULN-001).
+
+        El servidor es la fuente autoritativa y su bitacora nunca pierde
+        entradas (merge por id, no reemplazo):
+        - Entrante con id vigente y contenido distinto: rechazo (nadie
+          modifica el historial; si no, ErrorValidacion).
+        - Entrante nuevo con autorId != actor_id del re-sync: rechazo (la
+          bitacora solo crece por acciones propias del actor; el push no es
+          un canal para atribuir acciones ajenas; si no, ErrorValidacion).
+        - Entrante nuevo propio: se agrega.
+        - Entrada vigente omitida por el entrante: cliente desactualizado,
+          no borrado; su copia se conserva (un push stale no debe entrar en
+          422 ni poder limpiar el historial: la ambiguedad se resuelve a
+          favor de la conservacion).
+        """
+        por_id = {entrada.id: entrada for entrada in self._bitacora}
+        vistas: set[str] = set()
+        nuevas: list[BitacoraEntrada] = []
+        for entrada in entrantes:
+            vigente = por_id.get(entrada.id)
+            if vigente is not None:
+                if entrada != vigente:
+                    raise ErrorValidacion(
+                        "La bitacora es invariable: la entrada "
+                        f"'{entrada.id}' no puede modificarse en un re-sync "
+                        "(3.5)."
+                    )
+                continue
+            if entrada.id in vistas:
+                continue
+            vistas.add(entrada.id)
+            if entrada.autor_id != actor_id:
+                raise ErrorValidacion(
+                    "Solo puedes agregar entradas de bitacora propias: "
+                    f"'{entrada.id}' declara autorId "
+                    f"'{entrada.autor_id}' y el actor es '{actor_id}' "
+                    "(VULN-001)."
+                )
+            nuevas.append(entrada)
+        return [*self._bitacora, *nuevas]
 
     def _validar_diff_usuarios(self, entrantes: list[Usuario], actor_id: str) -> None:
         """Mitigacion VULN-001 (parte segura): la coleccion usuarios es de
@@ -737,3 +790,12 @@ class ServicioProyectos:
                 comentario=comentario,
             )
         )
+
+    def bitacora_reemplazar(self, entradas: list[BitacoraEntrada]) -> None:
+        """Reemplazo administrativo de bitacora para seeds y tests.
+
+        NO pasa por el re-sync (PUT /api/sincronizacion), que desde la
+        mitigacion VULN-001 es append-only para actores via _fusionar_
+        bitacora. Uso interno: montaje del repositorio inicial.
+        """
+        self._bitacora = list(entradas)

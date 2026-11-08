@@ -359,27 +359,107 @@ def test_vuln001_mitigado_escalada_de_roles_responde_409():
     _restaurar_usuarios_semilla()
 
 
-def test_vuln001_mitigado_borrado_de_bitacora_por_no_admin_sigue_restringido():
-    """VULN-001: la coleccion protegida es usuarios; bitacora sigue igual.
+def test_vuln001_mitigado_bitacora_borrado_ignorado_y_modificacion_rechazada():
+    """VULN-001 (parte bitacora, 3.5 invariante): el re-sync no puede
+    limpiar ni alterar el historial.
 
-    El re-sync total de colecciones de gobierno (proyectos/etapas/
-    entregables/bitacora) conserva el contrato actual (empuje post-mutacion
-    de una escritura ya validada); la mitigacion de usuarios no lo altera.
-    Restriccion profunda del re-sync = decision pendiente del propietario.
+    Antes el PUT reemplazaba la coleccion completa (borrar bitacora la
+    vacia). Ahora el servidor fusiona por id y conserva su copia: un push
+    con bitacora vacia (cliente stale o malicioso) es un no-op para la
+    bitacora, y modificar una entrada existente (mismo id, otro contenido)
+    se rechaza con 422 para cualquier actor.
     """
     estado = client.get("/api/sincronizacion").json()
-    estado["bitacora"] = []
-    respuesta = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ANALISTA})
-    assert respuesta.status_code == 200
-    assert respuesta.json()["bitacora"] == []
-    # Restaurar la semilla: el estado del test es el singleton en memoria.
-    estado_original = client.get("/api/sincronizacion").json()
-    estado_original["bitacora"] = _bitacora_semilla()
-    restaurada = client.put(
-        "/api/sincronizacion", json=estado_original, headers={"X-Actor-Id": ADMIN}
+    vigente_ids = [b["id"] for b in estado["bitacora"]]
+    assert len(vigente_ids) >= 1
+    # Borrado total (bitacora: []): el servidor conserva su copia completa.
+    sin_bitacora = dict(estado, bitacora=[])
+    ignorado_analista = client.put(
+        "/api/sincronizacion", json=sin_bitacora, headers={"X-Actor-Id": ANALISTA}
     )
-    assert restaurada.status_code == 200
-    assert len(restaurada.json()["bitacora"]) >= 1
+    assert ignorado_analista.status_code == 200
+    assert [b["id"] for b in ignorado_analista.json()["bitacora"]] == vigente_ids
+    # Modificacion de una entrada existente: mismo id, otro contenido.
+    modificada = [dict(b, comentario="editado") for b in estado["bitacora"]]
+    rechazada_mod = client.put(
+        "/api/sincronizacion", json=dict(estado, bitacora=modificada), headers={"X-Actor-Id": ADMIN}
+    )
+    assert rechazada_mod.status_code == 422
+    assert rechazada_mod.json()["codigo"] == "VALIDACION"
+    # La bitacora vigente sigue intacta (sin "editado", mismas ids).
+    despues = client.get("/api/sincronizacion").json()
+    assert [b["id"] for b in despues["bitacora"]] == vigente_ids
+    assert all(b["comentario"] != "editado" for b in despues["bitacora"])
+
+
+def test_vuln001_mitigado_bitacora_append_ajeno_rechazado():
+    """VULN-001: nadie aporta entradas de bitacora a nombre de otros.
+
+    Ni un no-Admin ni un Admin pueden agregar una entrada nueva cuyo
+    autorId sea otro actor: el empuje de bitacora no es un canal para
+    atribuir acciones ajenas. El estado queda intacto.
+    """
+    estado = client.get("/api/sincronizacion").json()
+    vigente_ids = [b["id"] for b in estado["bitacora"]]
+    ajena = dict(
+        estado["bitacora"][0],
+        id="b-vuln001-ajena",
+        autorId=PM,
+        comentario="Atribuida falsamente al PM",
+    )
+    for actor in (ANALISTA, ADMIN):
+        rechazado = client.put(
+            "/api/sincronizacion",
+            json=dict(estado, bitacora=[*estado["bitacora"], ajena]),
+            headers={"X-Actor-Id": actor},
+        )
+        assert rechazado.status_code == 422, f"el actor {actor} atribuyo acciones ajenas"
+        assert rechazado.json()["codigo"] == "VALIDACION"
+    despues = client.get("/api/sincronizacion").json()
+    assert [b["id"] for b in despues["bitacora"]] == vigente_ids
+    assert all(b["id"] != "b-vuln001-ajena" for b in despues["bitacora"])
+
+
+def test_vuln001_mitigado_bitacora_append_propio_acepta_y_fusiona():
+    """Caso feliz multi-pestaña: un cliente con estado stale empuja su
+    bitacora vieja mas una entrada propia; el servidor acepta el append y
+    preserva la entrada registrada en servidor mientras tanto (merge real,
+    no reemplazo).
+    """
+    estado = client.get("/api/sincronizacion").json()
+    antes = [b["id"] for b in estado["bitacora"]]
+    # Otra pestana (otro actor) registra en bitacora mientras este cliente
+    # conserva su estado viejo: el push no debe borrarla.
+    from app.main import servicio
+
+    servicio._registrar_bitacora(
+        estado["proyectos"][0]["id"], ADMIN, "cambio", comentario="Hecho en otra pestana"
+    )
+    propia = {
+        "id": "b-vuln001-propia",
+        "proyectoId": estado["proyectos"][0]["id"],
+        "autorId": PM,
+        "fecha": "2026-11-09T12:00:00+00:00",
+        "tipo": "cambio",
+        "etapaOrigen": None,
+        "etapaDestino": None,
+        "comentario": "Comentario propio del PM",
+    }
+    respuesta = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, bitacora=[*estado["bitacora"], propia]),
+        headers={"X-Actor-Id": PM},
+    )
+    assert respuesta.status_code == 200
+    despues = respuesta.json()["bitacora"]
+    ids = [b["id"] for b in despues]
+    # El append propio queda registrado y nada se perdio.
+    assert "b-vuln001-propia" in ids
+    assert ids[: len(antes)] == antes
+    # La entrada del otro actor (registrada en servidor) sigue presente.
+    assert any(b["comentario"] == "Hecho en otra pestana" for b in despues)
+    # El empuje stale no habia borrado la entrada nueva del servidor.
+    assert ids == antes + ["b-vuln001-propia"] or "b-vuln001-propia" in ids
 
 
 def test_vuln001_mitigado_re_sync_sin_cambios_de_usuarios_lo_acepta_cualquier_actor():
@@ -400,6 +480,7 @@ def _restaurar_usuarios_semilla() -> None:
 
 
 def _bitacora_semilla() -> list[dict]:
+    """Serializa BITACORA_SEMILLA como dicts camelCase (reporte/diff)."""
     from app.semilla import BITACORA_SEMILLA
 
     return [b.model_dump(mode="json", by_alias=True) for b in BITACORA_SEMILLA]

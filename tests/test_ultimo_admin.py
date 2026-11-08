@@ -117,7 +117,7 @@ def test_sincronizacion_reemplazo_acepta_estado_con_admin_activo():
             "proyectos": [],
             "etapas": [],
             "entregables": [],
-            "bitacora": [],
+            "bitacora": [b.model_dump(mode="json", by_alias=True) for b in servicio.bitacora()],
         },
         _admin().id,
     )
@@ -150,7 +150,7 @@ def test_api_desactivar_ultimo_admin_por_sincronizacion_responde_422():
             "proyectos": [],
             "etapas": [],
             "entregables": [],
-            "bitacora": [],
+            "bitacora": client.get("/api/bitacora").json(),
         },
         headers=_bearer(admin_token),
     )
@@ -175,7 +175,7 @@ def test_api_desactivar_admin_con_otros_activos_responde_200():
             "proyectos": [],
             "etapas": [],
             "entregables": [],
-            "bitacora": [],
+            "bitacora": client.get("/api/bitacora").json(),
         },
     )
     assert promovido.status_code == 200
@@ -189,7 +189,7 @@ def test_api_desactivar_admin_con_otros_activos_responde_200():
             "proyectos": [],
             "etapas": [],
             "entregables": [],
-            "bitacora": [],
+            "bitacora": client.get("/api/bitacora").json(),
         },
     )
     assert sincronizar.status_code == 200
@@ -205,7 +205,7 @@ def test_api_desactivar_admin_con_otros_activos_responde_200():
             "proyectos": [],
             "etapas": [],
             "entregables": [],
-            "bitacora": [],
+            "bitacora": client.get("/api/bitacora").json(),
         },
         headers={"X-Actor-Id": "u-doble"},
     )
