@@ -5,10 +5,11 @@ X-Actor-Id (compatibilidad con la sesion simulada). Todos los endpoints de
 dominio exigen sesion (mitigacion VULN-002, .ops/security/vulns.md); solo
 /api/salud y /api/auth/login son publicos. Los codigos de ErrorDominio se
 mapean a HTTP en el handler global de main.py: 404 no encontrado, 409
-conflicto de estado o permiso, 422 validacion.
+conflicto de estado o permiso, 422 validacion. El login aplica un limite
+de intentos fallidos por correo+IP (mitigacion VULN-003).
 """
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.auth import (
     ServicioCredenciales,
@@ -19,6 +20,7 @@ from app.auth import (
 )
 from app.domain.errores import ErrorEntidadNoEncontrada, ErrorValidacion
 from app.domain.modelos import Usuario
+from app.rate_limit import limitador
 from app.servicio import ResumenProyecto, ServicioProyectos
 
 from .esquemas import (
@@ -105,16 +107,29 @@ def _crear_router() -> APIRouter:
     @router.post("/api/auth/login")
     def iniciar_sesion(
         cuerpo: CuerpoLogin,
+        request: Request,
         servicio: ServicioProyectos = Depends(obtener_servicio),
         credenciales: ServicioCredenciales = Depends(obtener_credenciales),
         secreto: str = Depends(obtener_secreto),
     ) -> dict:
-        """Valida credenciales y devuelve un JWT con sub = id de usuario."""
+        """Valida credenciales y devuelve un JWT con sub = id de usuario.
+
+        Rate limit en memoria por correo+IP (VULN-003): superado el maximo
+        de fallos en la ventana responde 429 LIMITE_INTENTOS sin procesar
+        la credencial.
+        """
+        clave = f"{cuerpo.correo.strip().lower()}|{request.client.host if request.client else 'desconocida'}"
+        if limitador.bloqueado(clave):
+            raise HTTPException(
+                status_code=429,
+                detail={"codigo": "LIMITE_INTENTOS", "mensaje": "Demasiados intentos fallidos; reintente mas tarde."},
+            )
         usuario = next(
             (u for u in servicio.usuarios() if u.correo.lower() == cuerpo.correo.lower()),
             None,
         )
         if usuario is None or not credenciales.autenticar(usuario.correo, cuerpo.contrasena):
+            limitador.registrar_fallo(clave)
             raise HTTPException(
                 status_code=401,
                 detail={"codigo": "CREDENCIALES_INVALIDAS", "mensaje": "Correo o contrasena incorrectos."},

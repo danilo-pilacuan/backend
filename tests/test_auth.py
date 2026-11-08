@@ -11,6 +11,7 @@ from app.auth import (
     verificar_contrasena,
 )
 from app.main import app, secreto_auth
+from app.rate_limit import limitador
 
 # GET/PUT de dominio exigen sesion (VULN-002): header por defecto de admin.
 # Los tests anonimos usan el cliente anon (sin headers).
@@ -117,6 +118,36 @@ def test_login_usuario_inactivo_responde_403():
     respuesta = _login("ivan@projecthub.local", CONTRASENA_DEMO_DEFAULT)
     assert respuesta.status_code == 403
     assert respuesta.json()["detail"]["codigo"] == "USUARIO_INACTIVO"
+
+
+def test_login_limita_intentos_fallidos_responde_429():
+    """VULN-003 mitigada: superado el maximo de fallos en la ventana, 429."""
+    limitador.limpiar()
+    correo = "diana@projecthub.local"
+    for _ in range(5):
+        fallo = _login(correo, "incorrecta")
+        assert fallo.status_code == 401
+    bloqueado = _login(correo, "incorrecta")
+    assert bloqueado.status_code == 429
+    assert bloqueado.json()["detail"]["codigo"] == "LIMITE_INTENTOS"
+    # Incluso con la contrasena correcta el bloqueo sigue activo en la ventana.
+    correcto = _login(correo, CONTRASENA_DEMO_DEFAULT)
+    assert correcto.status_code == 429
+    # Otras cuentas siguen operativas (la clave incluye el correo).
+    otro = _login("paula@projecthub.local", CONTRASENA_DEMO_DEFAULT)
+    assert otro.status_code == 200
+    limitador.limpiar()
+
+
+def test_login_exitoso_no_acumula_fallos():
+    limitador.limpiar()
+    correo = "paula@projecthub.local"
+    for _ in range(4):
+        assert _login(correo, "incorrecta").status_code == 401
+        assert _login(correo, CONTRASENA_DEMO_DEFAULT).status_code == 200
+    # El quinto fallo seria bloqueo si los exitos contaran; aqui todavia es 401.
+    assert _login(correo, "incorrecta").status_code == 401
+    limitador.limpiar()
 
 
 # ---------- Sesion con token ----------
