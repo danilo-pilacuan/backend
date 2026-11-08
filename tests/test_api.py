@@ -307,6 +307,70 @@ def test_escribir_estado_entidad_invalida_responde_422():
 # ---------- Colecciones planas (13.3: bootstrap plano de los stores) ----------
 
 
+# ---------- Seguridad: hallazgos documentados (.ops/security/vulns.md) ----------
+
+
+def test_vuln002_lecturas_de_dominio_sin_sesion_responden_200():
+    """VULN-002 (Media, abierto): los GET de dominio no exigen sesion.
+
+    Test de caracterizacion: documenta el comportamiento actual y fallara
+    cuando se mitigue (exigir obtener_actor), recordando auditar a los
+    consumidores del frontend en el mismo cambio.
+    """
+    for ruta in ("/api/usuarios", "/api/proyectos", "/api/etapas", "/api/entregables", "/api/bitacora"):
+        respuesta = client.get(ruta)
+        assert respuesta.status_code == 200, f"{ruta} ya exige sesion: actualizar VULN-002 y los consumidores"
+
+
+def test_vuln001_put_sincronizacion_escalada_de_roles_sin_validacion():
+    """VULN-001 (Alta, abierto): el re-sync total no valida permisos.
+
+    Un actor cualquiera autenticado reemplaza el estado completo: aqui se
+    demuestra con la escalada de roles del analista. Test de caracterizacion:
+    al mitigar (validar diff contra la matriz), este test se reescribe para
+    exigir 409 PERMISO_DENEGADO.
+    """
+    estado = client.get("/api/sincronizacion").json()
+    for u in estado["usuarios"]:
+        if u["id"] == ANALISTA:
+            u["roles"] = ["Admin"]
+    respuesta = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ANALISTA})
+    assert respuesta.status_code == 200
+    roles = next(u for u in respuesta.json()["usuarios"] if u["id"] == ANALISTA)["roles"]
+    assert roles == ["Admin"], "VULN-001 mitigada: el PUT ya valida permisos; reescribir este test"
+
+
+def test_vuln001_put_sincronizacion_borrado_de_bitacora_sin_validacion():
+    """VULN-001 (Alta, abierto): destruccion de datos via re-sync total.
+
+    La bitacora es inmutable por diseno (3.5), pero el PUT la reemplaza sin
+    validacion: cualquier actor autenticado puede vaciarla.
+    """
+    estado = client.get("/api/sincronizacion").json()
+    estado["bitacora"] = []
+    respuesta = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ANALISTA})
+    assert respuesta.status_code == 200
+    assert respuesta.json()["bitacora"] == [], "VULN-001 mitigada: reescribir este test"
+    # Restaurar la semilla: el estado del test es el singleton en memoria.
+    client.get("/api/salud")  # no-op barato para conservar el orden legible
+    estado_original = client.get("/api/sincronizacion").json()
+    estado_original["bitacora"] = _bitacora_semilla()
+    restaurada = client.put(
+        "/api/sincronizacion", json=estado_original, headers={"X-Actor-Id": ADMIN}
+    )
+    assert restaurada.status_code == 200
+    assert len(restaurada.json()["bitacora"]) >= 1
+
+
+def _bitacora_semilla() -> list[dict]:
+    from app.semilla import BITACORA_SEMILLA
+
+    return [b.model_dump(mode="json", by_alias=True) for b in BITACORA_SEMILLA]
+
+
+# ---------- Colecciones planas: listados ----------
+
+
 def test_listar_todas_las_etapas_sin_filtros():
     respuesta = client.get("/api/etapas")
     assert respuesta.status_code == 200
