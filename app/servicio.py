@@ -233,6 +233,7 @@ class ServicioProyectos:
             bitacora = [BitacoraEntrada.model_validate(b) for b in cuerpo["bitacora"]]
         except ValidationError as exc:
             raise ErrorValidacion(f"Entidad invalida en el estado: {exc}") from exc
+        self._validar_ultimo_admin_activo(usuarios)
         self._validar_diff_usuarios(usuarios, actor_id)
         self._usuarios = usuarios
         self._proyectos = proyectos
@@ -252,6 +253,7 @@ class ServicioProyectos:
         solo Admin. Compara por id contra el estado vigente; si difiere en
         contenido (nuevo, eliminado, roles, activo, correo o nombre) exige
         Admin con el mismo guard de crear/editar usuarios (1.8)."""
+        self._validar_ultimo_admin_activo_reemplazo(entrantes)
         if len(entrantes) == len(self._usuarios) and all(
             any(u.model_dump(mode="json") == v.model_dump(mode="json") for v in self._usuarios)
             for u in entrantes
@@ -261,6 +263,23 @@ class ServicioProyectos:
         if actor is None:
             raise ErrorValidacion("El actor del re-sync no existe.")
         self._exigir_admin(actor)
+
+    def _validar_ultimo_admin_activo(self, usuarios: list[Usuario]) -> None:
+        """El sistema debe conservar siempre al menos un Admin activo; si el
+        estado entrante rompe ese invariante, ninguna cuenta podria volver a
+        administrar usuarios (hallazgo de la iteracion 50)."""
+        if not any(u.activo and "Admin" in u.roles for u in usuarios):
+            raise ErrorValidacion(
+                "El sistema debe conservar al menos un Admin activo; "
+                "promueve a otro Admin antes de retirar el ultimo."
+            )
+
+    def _validar_ultimo_admin_activo_reemplazo(self, entrantes: list[Usuario]) -> None:
+        if not any(u.activo and "Admin" in u.roles for u in entrantes):
+            raise ErrorValidacion(
+                "El sistema debe conservar al menos un Admin activo; "
+                "promueve a otro Admin antes de retirar el ultimo."
+            )
 
     def asignar_credenciales(self, credenciales: object) -> None:
         """Inyeccion tardia del servicio de credenciales (14.5): el singleton
@@ -570,6 +589,7 @@ class ServicioProyectos:
         if cambios.get("roles") is not None:
             roles = self._validar_roles(cambios["roles"])
         activo = bool(cambios["activo"]) if cambios.get("activo") is not None else actual.activo
+        self._exigir_ultimo_admin_intacto(actual, roles, activo)
         credenciales = getattr(self, "_credenciales", None)
         if credenciales is not None and correo != actual.correo:
             credenciales.renombrar(actual.correo, correo)
@@ -630,6 +650,22 @@ class ServicioProyectos:
             raise ErrorValidacion("Se requiere una sesion activa para administrar usuarios.")
         if "Admin" not in actor.roles:
             raise ErrorPermisoDenegado("administrarUsuarios", "Administracion", ["Admin"])
+
+    def _exigir_ultimo_admin_intacto(self, actual: Usuario, roles: list[Roles], activo: bool) -> None:
+        """El sistema siempre debe conservar al menos un Admin activo: si el
+        unico Admin activo pierde el rol o es desactivado, ninguna cuenta
+        podria volver a administrar usuarios (hallazgo de la iteracion 50)."""
+        if "Admin" in actual.roles and actual.activo and (actual.activo != activo or "Admin" not in roles):
+            otros = [
+                u
+                for u in self._usuarios
+                if u.id != actual.id and u.activo and "Admin" in u.roles
+            ]
+            if not otros:
+                raise ErrorValidacion(
+                    "El sistema debe conservar al menos un Admin activo; "
+                    "promueve a otro Admin antes de retirar el ultimo."
+                )
 
     def _validar_datos_etapa(self, etapa: EtapaTrabajo) -> None:
         validar_etapa(
