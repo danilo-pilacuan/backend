@@ -69,10 +69,28 @@ def obtener_actor(
     if token is not None:
         usuario_id = leer_token(token, secreto)
         if usuario_id is None:
-            raise ErrorValidacion("Token de sesion invalido o expirado.")
+            # Token presente pero invalido o expirado: la sesion murio. Se
+            # responde 401 (no 422) para que el cliente distinga "sesion
+            # expirada" de "peticion anonima" y cierre sesion en la UI.
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "codigo": "SESION_INVALIDA",
+                    "mensaje": "Tu sesion ha expirado; inicia sesion de nuevo.",
+                },
+            )
         actor = servicio.usuario_por_id(usuario_id)
         if actor is None:
-            raise ErrorEntidadNoEncontrada("Usuario", usuario_id)
+            # Token valido pero su usuario ya no existe (p. ej. eliminado por
+            # sincronizacion): la credencial no se puede resolver, es una
+            # sesion invalida (401), no una entidad faltante (404).
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "codigo": "SESION_INVALIDA",
+                    "mensaje": "Tu usuario ya no existe en el sistema; inicia sesion de nuevo.",
+                },
+            )
         return actor
     if not x_actor_id:
         raise ErrorValidacion("Falta autenticar la sesion (Bearer token o X-Actor-Id).")

@@ -1,4 +1,4 @@
-"""Tests de autenticacion (10.3, fase 14): login, JWT, me y fallback X-Actor-Id."""
+﻿"""Tests de autenticacion (10.3, fase 14): login, JWT, me y fallback X-Actor-Id."""
 
 import jwt as pyjwt
 import pytest
@@ -166,27 +166,54 @@ def test_me_sin_token_responde_422_validacion():
     assert respuesta.json()["codigo"] == "VALIDACION"
 
 
-def test_token_invalido_en_ruta_protegida_responde_422():
-    respuesta = client.get("/api/auth/me", headers={"Authorization": "Bearer no-es-un-jwt"})
-    assert respuesta.status_code == 422
-    assert "invalido" in respuesta.json()["mensaje"]
+def test_token_invalido_en_ruta_protegida_responde_401_sesion_invalida():
+    # Token presente pero invalido/expirado: 401 SESION_INVALIDA (no 422),
+    # para que el cliente distinga sesion expirada de peticion anonima.
+    respuesta = client.get(
+        "/api/auth/me", headers={"Authorization": "Bearer no-es-un-jwt"}
+    )
+    assert respuesta.status_code == 401
+    assert respuesta.json()["detail"]["codigo"] == "SESION_INVALIDA"
+    assert "expirado" in respuesta.json()["detail"]["mensaje"]
+
+
+def test_token_de_usuario_eliminado_responde_401_sesion_invalida():
+    # Caso borde 14.6: token firmado y vigente cuyo usuario ya no existe
+    # (p. ej. eliminado por sincronizacion). La credencial no se puede
+    # resolver: 401 SESION_INVALIDA, no 404. Autocontenido: crea su propio
+    # usuario para no depender del orden de la suite.
+    admin_token = _login("diana@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
+    creada = client.post(
+        "/api/usuarios",
+        json={
+            "nombre": "Usuario Efimero",
+            "correo": "efimero@projecthub.local",
+            "roles": ["Analista"],
+            "activo": True,
+        },
+        headers=_bearer(admin_token),
+    )
+    assert creada.status_code == 201
+    token = _login("efimero@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
+    usuarios = client.get("/api/usuarios").json()
+    restantes = [u for u in usuarios if u["correo"] != "efimero@projecthub.local"]
+    sincronizar = client.put(
+        "/api/sincronizacion",
+        json={"usuarios": restantes, "proyectos": [], "etapas": [], "entregables": [], "bitacora": []},
+        headers=_bearer(admin_token),
+    )
+    assert sincronizar.status_code == 200
+    after = client.get("/api/auth/me", headers=_bearer(token))
+    assert after.status_code == 401
+    assert after.json()["detail"]["codigo"] == "SESION_INVALIDA"
 
 
 def test_token_de_usuario_eliminado_responde_404():
-    token = _login("sergio@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
-    # El estado del test es de memoria (conftest): se elimina el usuario por
-    # sincronizacion (el actor del PUT es otro usuario con token valido).
-    admin_token = _login("diana@projecthub.local", CONTRASENA_DEMO_DEFAULT).json()["token"]
-    usuarios = client.get("/api/usuarios").json()
-    restantes = [u for u in usuarios if u["id"] != "u-sponsor"]
-    respuesta = client.put(
-        "/api/sincronizacion",
-        json={"usuarios": restantes, "proyectos": [], "etapas": [], "entregables": [], "bitacora": []},
-        headers={"Authorization": f"Bearer {admin_token}"},
-    )
-    assert respuesta.status_code == 200
-    after = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
-    assert after.status_code == 404
+    # Ruta de compatibilidad X-Actor-Id: sin token que resolver, un id de
+    # usuario inexistente sigue siendo entidad no encontrada (404).
+    respuesta = client.get("/api/auth/me", headers={"X-Actor-Id": "u-inexistente"})
+    assert respuesta.status_code == 404
+    assert respuesta.json()["codigo"] == "ENTIDAD_NO_ENCONTRADA"
 
 
 def test_rutas_protegidas_aceptan_token_en_lugar_de_x_actor_id():
