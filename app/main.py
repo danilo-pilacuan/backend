@@ -105,16 +105,30 @@ app.include_router(_crear_router())
 # CORS para el frontend federado (shell en 4300/4400, remotes 4301-4304).
 # Sin credenciales (cookies); la sesion viaja en el header Authorization
 # (Bearer JWT) y X-Actor-Id queda como fallback.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+def _origenes_permitidos() -> list[str]:
+    """Origenes CORS por entorno (mitigacion VULN-004).
+
+    ALLOWED_ORIGINS separa por comas y admite barras finales; el default
+    cubre desarrollo y demo local (4300-4304/4400-4404).
+    """
+    bruta = os.environ.get("ALLOWED_ORIGINS", "").strip()
+    if bruta:
+        origenes = [o.strip().rstrip("/") for o in bruta.split(",") if o.strip()]
+        if origenes:
+            return origenes
+    return [
         "http://localhost:4300",
         "http://localhost:4400",
         "http://localhost:4301",
         "http://localhost:4302",
         "http://localhost:4303",
         "http://localhost:4304",
-    ],
+    ]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origenes_permitidos(),
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type", "X-Actor-Id", "Authorization"],
 )
