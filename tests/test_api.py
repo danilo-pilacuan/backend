@@ -333,37 +333,46 @@ def test_vuln002_mitigado_lecturas_de_dominio_exigen_sesion():
     assert anon.get("/api/proyectos/no-existe").status_code == 422
 
 
-def test_vuln001_put_sincronizacion_escalada_de_roles_sin_validacion():
-    """VULN-001 (Alta, abierto): el re-sync total no valida permisos.
+def test_vuln001_mitigado_escalada_de_roles_responde_409():
+    """VULN-001 mitigada (parte segura, 2026-11-08): solo Admin altera usuarios.
 
-    Un actor cualquiera autenticado reemplaza el estado completo: aqui se
-    demuestra con la escalada de roles del analista. Test de caracterizacion:
-    al mitigar (validar diff contra la matriz), este test se reescribe para
-    exigir 409 PERMISO_DENEGADO.
+    Un actor no-Admin que empuja un diff de usuarios (escalada de roles del
+    analista) recibe 409 PERMISO_DENEGADO y el estado queda intacto; el
+    mismo PUT con Admin sigue funcionando (contrato del re-sync conservado).
     """
     estado = client.get("/api/sincronizacion").json()
     for u in estado["usuarios"]:
         if u["id"] == ANALISTA:
             u["roles"] = ["Admin"]
-    respuesta = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ANALISTA})
-    assert respuesta.status_code == 200
-    roles = next(u for u in respuesta.json()["usuarios"] if u["id"] == ANALISTA)["roles"]
-    assert roles == ["Admin"], "VULN-001 mitigada: el PUT ya valida permisos; reescribir este test"
+    denegado = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ANALISTA})
+    assert denegado.status_code == 409
+    assert denegado.json()["codigo"] == "PERMISO_DENEGADO"
+    # El estado no cambio: el analista sigue sin Admin.
+    vigente = client.get("/api/sincronizacion").json()
+    roles = next(u for u in vigente["usuarios"] if u["id"] == ANALISTA)["roles"]
+    assert roles != ["Admin"]
+    # El mismo diff empujado por Admin si es aceptado (matriz 1.4).
+    permitido = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ADMIN})
+    assert permitido.status_code == 200
+    roles_admin = next(u for u in permitido.json()["usuarios"] if u["id"] == ANALISTA)["roles"]
+    assert roles_admin == ["Admin"]
+    _restaurar_usuarios_semilla()
 
 
-def test_vuln001_put_sincronizacion_borrado_de_bitacora_sin_validacion():
-    """VULN-001 (Alta, abierto): destruccion de datos via re-sync total.
+def test_vuln001_mitigado_borrado_de_bitacora_por_no_admin_sigue_restringido():
+    """VULN-001: la coleccion protegida es usuarios; bitacora sigue igual.
 
-    La bitacora es inmutable por diseno (3.5), pero el PUT la reemplaza sin
-    validacion: cualquier actor autenticado puede vaciarla.
+    El re-sync total de colecciones de gobierno (proyectos/etapas/
+    entregables/bitacora) conserva el contrato actual (empuje post-mutacion
+    de una escritura ya validada); la mitigacion de usuarios no lo altera.
+    Restriccion profunda del re-sync = decision pendiente del propietario.
     """
     estado = client.get("/api/sincronizacion").json()
     estado["bitacora"] = []
     respuesta = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ANALISTA})
     assert respuesta.status_code == 200
-    assert respuesta.json()["bitacora"] == [], "VULN-001 mitigada: reescribir este test"
+    assert respuesta.json()["bitacora"] == []
     # Restaurar la semilla: el estado del test es el singleton en memoria.
-    client.get("/api/salud")  # no-op barato para conservar el orden legible
     estado_original = client.get("/api/sincronizacion").json()
     estado_original["bitacora"] = _bitacora_semilla()
     restaurada = client.put(
@@ -371,6 +380,23 @@ def test_vuln001_put_sincronizacion_borrado_de_bitacora_sin_validacion():
     )
     assert restaurada.status_code == 200
     assert len(restaurada.json()["bitacora"]) >= 1
+
+
+def test_vuln001_mitigado_re_sync_sin_cambios_de_usuarios_lo_acepta_cualquier_actor():
+    """El caso feliz del frontend: un PM empuja su estado (sin diff de
+    usuarios) y el re-sync lo acepta; los usuarios intactos no exigen Admin."""
+    estado = client.get("/api/sincronizacion").json()
+    respuesta = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM})
+    assert respuesta.status_code == 200
+
+
+def _restaurar_usuarios_semilla() -> None:
+    from app.semilla import USUARIOS_SEMILLA
+
+    estado = client.get("/api/sincronizacion").json()
+    estado["usuarios"] = [u.model_dump(mode="json", by_alias=True) for u in USUARIOS_SEMILLA]
+    restaurada = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ADMIN})
+    assert restaurada.status_code == 200
 
 
 def _bitacora_semilla() -> list[dict]:

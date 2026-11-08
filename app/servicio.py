@@ -206,6 +206,14 @@ class ServicioProyectos:
         `id` string unico dentro de su coleccion; los modelos se validan con
         Pydantic (populate_by_name acepta camelCase). Lanza ErrorValidacion
         si el payload no tiene la forma esperada.
+
+        Validacion de permisos sobre el diff (mitigacion VULN-001): solo un
+        Admin puede alterar la coleccion de usuarios (crear, eliminar o
+        cambiar roles/activo/correo/nombre); los actores sin Admin solo
+        pueden empujar el mismo set de usuarios que ya existe. El resto de
+        colecciones (proyectos/etapas/entregables/bitacora) se acepta como
+        hoy: su gobierno sigue siendo el empuje post-mutacion de una
+        escritura ya validada por caso de uso.
         """
         claves = {"usuarios", "proyectos", "etapas", "entregables", "bitacora"}
         for clave in claves:
@@ -225,6 +233,7 @@ class ServicioProyectos:
             bitacora = [BitacoraEntrada.model_validate(b) for b in cuerpo["bitacora"]]
         except ValidationError as exc:
             raise ErrorValidacion(f"Entidad invalida en el estado: {exc}") from exc
+        self._validar_diff_usuarios(usuarios, actor_id)
         self._usuarios = usuarios
         self._proyectos = proyectos
         self._etapas = etapas
@@ -237,6 +246,21 @@ class ServicioProyectos:
         if credenciales is not None:
             credenciales.sincronizar_con_usuarios({u.correo for u in usuarios})
         return self.estado_completo()
+
+    def _validar_diff_usuarios(self, entrantes: list[Usuario], actor_id: str) -> None:
+        """Mitigacion VULN-001 (parte segura): la coleccion usuarios es de
+        solo Admin. Compara por id contra el estado vigente; si difiere en
+        contenido (nuevo, eliminado, roles, activo, correo o nombre) exige
+        Admin con el mismo guard de crear/editar usuarios (1.8)."""
+        if len(entrantes) == len(self._usuarios) and all(
+            any(u.model_dump(mode="json") == v.model_dump(mode="json") for v in self._usuarios)
+            for u in entrantes
+        ) and len({u.id for u in entrantes}) == len(self._usuarios):
+            return
+        actor = self.usuario_por_id(actor_id)
+        if actor is None:
+            raise ErrorValidacion("El actor del re-sync no existe.")
+        self._exigir_admin(actor)
 
     def asignar_credenciales(self, credenciales: object) -> None:
         """Inyeccion tardia del servicio de credenciales (14.5): el singleton

@@ -473,7 +473,10 @@ def _crear_router() -> APIRouter:
 
         El frontend valida con las mismas reglas de dominio y empuja su
         estado completo tras cada mutacion; el backend revalida la
-        invariante minima (estructuras y unicidad) y persiste.
+        invariante minima (estructuras y unicidad) y persiste. La validacion
+        del diff contra la matriz de permisos (mitigacion VULN-001) ocurre
+        dentro del servicio: los cambios de usuarios solo los admite un
+        Admin.
         """
         return servicio.escribir_estado_completo(cuerpo, actor.id)
 
