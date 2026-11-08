@@ -405,6 +405,26 @@ def _crear_router() -> APIRouter:
     ) -> list[dict]:
         return [b.model_dump(by_alias=True) for b in servicio.bitacora_de_proyecto(proyecto_id)]
 
+    # ----- Colecciones planas (13.3: bootstrap plano de los stores) -----
+
+    @router.get("/api/etapas")
+    def listar_todas_las_etapas(
+        servicio: ServicioProyectos = Depends(obtener_servicio),
+    ) -> list[dict]:
+        return [e.model_dump(mode="json", by_alias=True) for e in servicio.etapas()]
+
+    @router.get("/api/entregables")
+    def listar_todos_los_entregables(
+        servicio: ServicioProyectos = Depends(obtener_servicio),
+    ) -> list[dict]:
+        return [e.model_dump(mode="json", by_alias=True) for e in servicio.entregables()]
+
+    @router.get("/api/bitacora")
+    def listar_toda_la_bitacora(
+        servicio: ServicioProyectos = Depends(obtener_servicio),
+    ) -> list[dict]:
+        return [b.model_dump(mode="json", by_alias=True) for b in servicio.bitacora()]
+
     # ----- Sincronizacion de estado (13.4: escrituras del frontend) -----
 
     @router.get("/api/sincronizacion")

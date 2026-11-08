@@ -310,3 +310,50 @@ def test_escribir_estado_entidad_invalida_responde_422():
     )
     assert respuesta.status_code == 422
     assert respuesta.json()["codigo"] == "VALIDACION"
+
+
+# ---------- Colecciones planas (13.3: bootstrap plano de los stores) ----------
+
+
+def test_listar_todas_las_etapas_sin_filtros():
+    respuesta = client.get("/api/etapas")
+    assert respuesta.status_code == 200
+    etapas = respuesta.json()
+    assert len(etapas) >= 3
+    assert "fechaInicio" in etapas[0]
+    assert "fecha_inicio" not in etapas[0]
+    assert all(e["proyectoId"] for e in etapas)
+
+
+def test_listar_todos_los_entregables_sin_filtros():
+    respuesta = client.get("/api/entregables")
+    assert respuesta.status_code == 200
+    entregables = respuesta.json()
+    assert len(entregables) >= 1
+    assert "proyectoId" in entregables[0]
+    assert "creadoPorId" in entregables[0]
+    assert "etapa" in entregables[0]
+
+
+def test_listar_toda_la_bitacora_sin_filtros():
+    respuesta = client.get("/api/bitacora")
+    assert respuesta.status_code == 200
+    bitacora = respuesta.json()
+    assert len(bitacora) >= 1
+    assert "proyectoId" in bitacora[0]
+    assert "autorId" in bitacora[0]
+    assert "tipo" in bitacora[0]
+
+
+def test_colecciones_planas_coinciden_con_sincronizacion():
+    sincro = client.get("/api/sincronizacion").json()
+    for ruta, clave in (
+        ("/api/etapas", "etapas"),
+        ("/api/entregables", "entregables"),
+        ("/api/bitacora", "bitacora"),
+    ):
+        plana = client.get(ruta).json()
+        ids_plana = sorted(e["id"] for e in plana)
+        ids_sincro = sorted(e["id"] for e in sincro[clave])
+        assert ids_plana == ids_sincro, f"{ruta} no coincide con sincronizacion.{clave}"
+

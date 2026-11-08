@@ -157,11 +157,20 @@ class ServicioProyectos:
     def etapas_de_proyecto(self, proyecto_id: str) -> list[EtapaTrabajo]:
         return [e for e in self._etapas if e.proyecto_id == proyecto_id]
 
+    def etapas(self) -> list[EtapaTrabajo]:
+        return list(self._etapas)
+
     def entregables_de_proyecto(self, proyecto_id: str) -> list[Entregable]:
         return [e for e in self._entregables if e.proyecto_id == proyecto_id]
 
+    def entregables(self) -> list[Entregable]:
+        return list(self._entregables)
+
     def bitacora_de_proyecto(self, proyecto_id: str) -> list[BitacoraEntrada]:
         return [b for b in self._bitacora if b.proyecto_id == proyecto_id]
+
+    def bitacora(self) -> list[BitacoraEntrada]:
+        return list(self._bitacora)
 
     def resumen(self, proyecto_id: str) -> ResumenProyecto:
         proyecto = self._exigir_proyecto(proyecto_id)
