@@ -114,9 +114,9 @@ def test_sincronizacion_reemplazo_acepta_estado_con_admin_activo():
     estado = servicio.escribir_estado_completo(
         {
             "usuarios": [u.model_dump(mode="json", by_alias=True) for u in entrantes],
-            "proyectos": [],
-            "etapas": [],
-            "entregables": [],
+            "proyectos": [p.model_dump(mode="json", by_alias=True) for p in servicio.proyectos()],
+            "etapas": [e.model_dump(mode="json", by_alias=True) for e in servicio.etapas()],
+            "entregables": [e.model_dump(mode="json", by_alias=True) for e in servicio.entregables()],
             "bitacora": [b.model_dump(mode="json", by_alias=True) for b in servicio.bitacora()],
         },
         _admin().id,
@@ -147,9 +147,9 @@ def test_api_desactivar_ultimo_admin_por_sincronizacion_responde_422():
         "/api/sincronizacion",
         json={
             "usuarios": usuarios,
-            "proyectos": [],
-            "etapas": [],
-            "entregables": [],
+            "proyectos": client.get("/api/proyectos").json(),
+            "etapas": client.get("/api/etapas").json(),
+            "entregables": client.get("/api/entregables").json(),
             "bitacora": client.get("/api/bitacora").json(),
         },
         headers=_bearer(admin_token),
@@ -172,9 +172,9 @@ def test_api_desactivar_admin_con_otros_activos_responde_200():
         "/api/sincronizacion",
         json={
             "usuarios": usuarios,
-            "proyectos": [],
-            "etapas": [],
-            "entregables": [],
+            "proyectos": client.get("/api/proyectos").json(),
+            "etapas": client.get("/api/etapas").json(),
+            "entregables": client.get("/api/entregables").json(),
             "bitacora": client.get("/api/bitacora").json(),
         },
     )
@@ -186,9 +186,9 @@ def test_api_desactivar_admin_con_otros_activos_responde_200():
         "/api/sincronizacion",
         json={
             "usuarios": usuarios,
-            "proyectos": [],
-            "etapas": [],
-            "entregables": [],
+            "proyectos": client.get("/api/proyectos").json(),
+            "etapas": client.get("/api/etapas").json(),
+            "entregables": client.get("/api/entregables").json(),
             "bitacora": client.get("/api/bitacora").json(),
         },
     )
@@ -202,9 +202,9 @@ def test_api_desactivar_admin_con_otros_activos_responde_200():
         "/api/sincronizacion",
         json={
             "usuarios": usuarios,
-            "proyectos": [],
-            "etapas": [],
-            "entregables": [],
+            "proyectos": client.get("/api/proyectos").json(),
+            "etapas": client.get("/api/etapas").json(),
+            "entregables": client.get("/api/entregables").json(),
             "bitacora": client.get("/api/bitacora").json(),
         },
         headers={"X-Actor-Id": "u-doble"},

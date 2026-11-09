@@ -223,6 +223,16 @@ class ServicioProyectos:
         toda entrada nueva debe tener autorId == actor_id del re-sync (la
         bitacora solo crece por acciones propias, no por empuje de pares ni
         de un Admin que "escribe" por otro). Ver _fusionar_bitacora.
+
+        Integridad referencial de la bitacora (mitigacion VULN-006): solo se
+        exige en las entradas NUEVAS de la fusion, contra el estado entrante
+        (proyectos/usuarios que quedan tras el push). Las entradas vigentes
+        son historial inmutable (3.5) y pueden referenciar proyectos
+        eliminados en pushes posteriores: validarlas bloquearia para siempre
+        el re-sync, porque el servidor no permite borrar entradas y el
+        cliente nunca podria volver a empujar su estado. La validacion vive
+        en _fusionar_bitacora (el unico punto donde se distingue lo nuevo de
+        lo vigente), no en _validar_invariantes_dominio.
         """
         claves = {"usuarios", "proyectos", "etapas", "entregables", "bitacora"}
         for clave in claves:
@@ -242,10 +252,15 @@ class ServicioProyectos:
             bitacora = [BitacoraEntrada.model_validate(b) for b in cuerpo["bitacora"]]
         except ValidationError as exc:
             raise ErrorValidacion(f"Entidad invalida en el estado: {exc}") from exc
-        self._validar_invariantes_dominio(proyectos, etapas, entregables)
+        self._validar_invariantes_dominio(usuarios, proyectos, etapas, entregables)
         self._validar_ultimo_admin_activo(usuarios)
         self._validar_diff_usuarios(usuarios, actor_id)
-        bitacora = self._fusionar_bitacora(bitacora, actor_id)
+        bitacora = self._fusionar_bitacora(
+            bitacora,
+            actor_id,
+            ids_proyectos={p.id for p in proyectos},
+            ids_usuarios={u.id for u in usuarios},
+        )
         self._usuarios = usuarios
         self._proyectos = proyectos
         self._etapas = etapas
@@ -260,9 +275,13 @@ class ServicioProyectos:
         return self.estado_completo()
 
     def _fusionar_bitacora(
-        self, entrantes: list[BitacoraEntrada], actor_id: str
+        self,
+        entrantes: list[BitacoraEntrada],
+        actor_id: str,
+        ids_proyectos: set[str],
+        ids_usuarios: set[str],
     ) -> list[BitacoraEntrada]:
-        """Fusiona el re-sync de bitacora (3.5 invariante, VULN-001).
+        """Fusiona el re-sync de bitacora (3.5 invariante, VULN-001/006).
 
         El servidor es la fuente autoritativa y su bitacora nunca pierde
         entradas (merge por id, no reemplazo):
@@ -271,11 +290,21 @@ class ServicioProyectos:
         - Entrante nuevo con autorId != actor_id del re-sync: rechazo (la
           bitacora solo crece por acciones propias del actor; el push no es
           un canal para atribuir acciones ajenas; si no, ErrorValidacion).
-        - Entrante nuevo propio: se agrega.
+        - Entrante nuevo propio: se valida su integridad referencial contra
+          el estado entrante (VULN-006): proyectoId debe existir entre los
+          proyectos que quedan tras el push; autorId entre los usuarios
+          entrantes (defensa en profundidad: con el guard de autor propia
+          el autor ya es el actor, que existe; se mantiene por si la
+          fusion se reutiliza desde otro camino). Si no, ErrorValidacion.
         - Entrada vigente omitida por el entrante: cliente desactualizado,
           no borrado; su copia se conserva (un push stale no debe entrar en
           422 ni poder limpiar el historial: la ambiguedad se resuelve a
           favor de la conservacion).
+
+        Las entradas vigentes NO se revalidan referencialmente: son
+        historial inmutable (3.5) y pueden referenciar proyectos eliminados
+        en pushes posteriores (mitigacion VULN-006: revalidarlas dejaria el
+        re-sync bloqueado para siempre, pues la bitacora no se puede borrar).
         """
         por_id = {entrada.id: entrada for entrada in self._bitacora}
         vistas: set[str] = set()
@@ -300,19 +329,29 @@ class ServicioProyectos:
                     f"'{entrada.autor_id}' y el actor es '{actor_id}' "
                     "(VULN-001)."
                 )
+            if entrada.proyecto_id not in ids_proyectos:
+                raise ErrorValidacion(
+                    f'La entrada de bitacora "{entrada.id}" referencia al proyecto '
+                    f'"{entrada.proyecto_id}", que no existe.'
+                )
+            if entrada.autor_id not in ids_usuarios:
+                raise ErrorValidacion(
+                    f'La entrada de bitacora "{entrada.id}" tiene un autor que no existe (3.5).'
+                )
             nuevas.append(entrada)
         return [*self._bitacora, *nuevas]
 
     def _validar_invariantes_dominio(
         self,
+        usuarios: list[Usuario],
         proyectos: list[Proyecto],
         etapas: list[EtapaTrabajo],
         entregables: list[Entregable],
     ) -> None:
-        """Mitigacion del hallazgo it61: el re-sync aplica las mismas
-        invariantes de dominio que los casos de uso; el push no es un canal
-        para colar datos que la API normal rechaza (mismo tratamiento que
-        VULN-001/002: no confiar en el cliente).
+        """Mitigacion del hallazgo it61 (VULN-005): el re-sync aplica las
+        mismas invariantes de dominio que los casos de uso; el push no es un
+        canal para colar datos que la API normal rechaza (mismo tratamiento
+        que VULN-001/002: no confiar en el cliente).
 
         - Etapas: validar_etapa (fechas validas y coherentes, avance 0-100,
           montos no negativos y finitos); el consumo mayor al asignado no se
@@ -323,8 +362,35 @@ class ServicioProyectos:
         - Entregables: espejo de validar_aprobacion (gates.ts 3.4): si hay
           aprobador, no puede ser el autor del documento y debe venir con
           fecha de aprobacion.
+        - Referencias (it62, VULN-006): el canal normal las exige
+          (_exigir_proyecto, _exigir_responsable_activo, 3.5 y 6.5); un
+          proyecto_id/autor/responsable inexistente, una dependencia
+          huerfana o cruzada entre proyectos no puede entrar por push.
+          El responsable debe existir pero puede estar inactivo: el canal
+          normal permite desactivarlo sin reasignar etapas (estado
+          alcanzable). La bitacora no se valida aqui (mitigacion VULN-006):
+          sus referencias solo se comprueban en las entradas NUEVAS, dentro
+          de _fusionar_bitacora, porque las vigentes son historial
+          inmutable (3.5) que puede referenciar proyectos eliminados en
+          pushes posteriores sin que el re-sync quede bloqueado.
         """
+        ids_proyectos = {p.id for p in proyectos}
         for etapa in etapas:
+            if etapa.proyecto_id not in ids_proyectos:
+                raise ErrorValidacion(
+                    f'La etapa "{etapa.nombre}" referencia al proyecto '
+                    f'"{etapa.proyecto_id}", que no existe.'
+                )
+            responsable = next((u for u in usuarios if u.id == etapa.responsable_id), None)
+            if responsable is None:
+                raise ErrorValidacion(
+                    f'El responsable "{etapa.responsable_id}" de la etapa '
+                    f'"{etapa.nombre}" no existe.'
+                )
+            # Nota: se exige que exista, no que este activo: el canal normal
+            # permite desactivar a un responsable sin reasignar sus etapas
+            # (desactivar_usuario no cascada), asi que ese estado es
+            # alcanzable y el re-sync debe aceptarlo.
             self._validar_datos_etapa(etapa)
         for proyecto in proyectos:
             monto = proyecto.presupuesto_estimado
@@ -336,6 +402,11 @@ class ServicioProyectos:
             ):
                 raise ErrorValidacion("El presupuesto estimado no puede ser negativo.")
         for entregable in entregables:
+            if entregable.proyecto_id not in ids_proyectos:
+                raise ErrorValidacion(
+                    f'El entregable "{entregable.nombre}" referencia al proyecto '
+                    f'"{entregable.proyecto_id}", que no existe.'
+                )
             if entregable.aprobado_por_id is None:
                 continue
             if entregable.aprobado_en is None:
@@ -344,6 +415,11 @@ class ServicioProyectos:
                 )
             if entregable.aprobado_por_id == entregable.creado_por_id:
                 raise ErrorValidacion("El autor de un entregable no puede aprobar su propio documento.")
+        for etapa in etapas:
+            if etapa.dependencias:
+                validar_dependencias(
+                    etapa.id, etapa.proyecto_id, [e for e in etapas if e.proyecto_id == etapa.proyecto_id]
+                )
 
     def _validar_diff_usuarios(self, entrantes: list[Usuario], actor_id: str) -> None:
         """Mitigacion VULN-001 (parte segura): la coleccion usuarios es de

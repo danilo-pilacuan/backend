@@ -144,6 +144,7 @@ def test_flujo_cargar_aprobar_entregables_y_avanzar():
     # La bitacora registro la transicion.
     bitacora = client.get("/api/proyectos/p3/bitacora").json()
     assert any(b["tipo"] == "transicion" and b["etapaDestino"] == "ValidacionPoC" for b in bitacora)
+    _push_estado_limpio()
 
 
 def test_aprobar_entregable_reglas_de_negocio():
@@ -397,6 +398,101 @@ def test_escribir_estado_autoaprobacion_responde_422():
     assert ent7["aprobadoPorId"] == aprobado_original
 
 
+def test_escribir_estado_referencias_rotas_responde_422():
+    """El push no es canal para colar referencias rotas: el canal normal las
+    exige (_exigir_proyecto, _exigir_responsable_activo, validar_dependencias
+    6.5). Mismo tratamiento que el resto de invariantes del re-sync (it62)."""
+    estado = client.get("/api/sincronizacion").json()
+    # Etapa con proyectoId inexistente.
+    etapa = dict(estado["etapas"][0], proyectoId="p-inexistente")
+    rota = dict(estado, etapas=[etapa, *estado["etapas"][1:]])
+    r = client.put("/api/sincronizacion", json=rota, headers={"X-Actor-Id": ADMIN})
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Entregable con proyectoId inexistente.
+    objetivo = next(e for e in estado["entregables"] if e["id"] == "ent-7")
+    entregable = dict(objetivo, proyectoId="p-inexistente")
+    rota = dict(
+        estado,
+        entregables=[entregable, *[e for e in estado["entregables"] if e["id"] != "ent-7"]],
+    )
+    r = client.put("/api/sincronizacion", json=rota, headers={"X-Actor-Id": ADMIN})
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Etapa con responsable inexistente (el canal exige responsable activo
+    # al crear/editar; un responsable que existe pero fue desactivado es un
+    # estado alcanzable por desactivar_usuario, asi que el push lo acepta).
+    inexistente = dict(estado["etapas"][0], responsableId="u-fantasma")
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, etapas=[inexistente, *estado["etapas"][1:]]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Dependencia que no existe o pertenece a otro proyecto (6.5).
+    fantasma = dict(estado["etapas"][0], dependencias=["e-no-existe"])
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, etapas=[fantasma, *estado["etapas"][1:]]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    cruzada = dict(estado["etapas"][0], dependencias=[estado["etapas"][-1]["id"]])
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, etapas=[cruzada, *estado["etapas"][1:]]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Bitacora con autor o proyecto inexistentes, en entradas NUEVAS (3.5: la
+    # bitacora no miente; mitigacion VULN-006: la referencia se exige en las
+    # entradas nuevas, no en el historial vigente, que es inmutable y puede
+    # referenciar proyectos eliminados por pushes posteriores).
+    autor_roto = dict(estado["bitacora"][0], id="b-ref-rotas-1", autorId="u-fantasma")
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, bitacora=[autor_roto, *estado["bitacora"]]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    proyecto_roto = dict(estado["bitacora"][0], id="b-ref-rotas-2", proyectoId="p-inexistente")
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, bitacora=[proyecto_roto, *estado["bitacora"]]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Estado vigente intacto tras todos los rechazos.
+    vigente = client.get("/api/sincronizacion").json()
+    assert vigente == estado
+
+
+def test_escribir_estado_bitacora_historial_sobrevive_eliminacion_200():
+    """Regresion VULN-006: un push que elimina un proyecto cuya bitacora
+    vigente lo referencia debe tener exito (200); el historial es inmutable
+    (3.5) y el servidor conserva la entrada huerfana en lugar de bloquear
+    para siempre el re-sync con un 422 que nadie puede deshacer (la
+    bitacora no se puede borrar). El siguiente GET->PUT del propio cliente
+    desactualizado (con la coleccion de proyectos ya sin el proyecto) debe
+    seguir funcionando."""
+    estado = client.get("/api/sincronizacion").json()
+    restantes = [p for p in estado["proyectos"] if p["id"] != "p6"]
+    assert len(restantes) == len(estado["proyectos"]) - 1
+    sin_p6 = dict(estado, proyectos=restantes)
+    r = client.put("/api/sincronizacion", json=sin_p6, headers={"X-Actor-Id": ADMIN})
+    assert r.status_code == 200
+    # b5 sigue en el historial aunque p6 ya no exista.
+    con_huerfana = client.get("/api/sincronizacion").json()
+    assert any(b["id"] == "b5" for b in con_huerfana["bitacora"])
+    # El roundtrip del cliente desactualizado no queda bloqueado: la entrada
+    # vigente huerfana pasa sin revalidacion (VULN-006).
+    r = client.put("/api/sincronizacion", json=con_huerfana, headers={"X-Actor-Id": ADMIN})
+    assert r.status_code == 200
+    # p6 sigue ausente (el servidor no lo devuelve mágicamente: lo elimina
+    # el push); b5 permanece en el historial conservado.
+    estado_final = client.get("/api/sincronizacion").json()
+    assert all(p["id"] != "p6" for p in estado_final["proyectos"])
+    assert any(b["id"] == "b5" for b in estado_final["bitacora"])
+
+
 # ---------- Colecciones planas (13.3: bootstrap plano de los stores) ----------
 
 
@@ -444,6 +540,7 @@ def test_vuln001_mitigado_escalada_de_roles_responde_409():
     roles_admin = next(u for u in permitido.json()["usuarios"] if u["id"] == ANALISTA)["roles"]
     assert roles_admin == ["Admin"]
     _restaurar_usuarios_semilla()
+    _push_estado_limpio()
 
 
 def test_vuln001_mitigado_bitacora_borrado_ignorado_y_modificacion_rechazada():
@@ -564,6 +661,24 @@ def _restaurar_usuarios_semilla() -> None:
     estado["usuarios"] = [u.model_dump(mode="json", by_alias=True) for u in USUARIOS_SEMILLA]
     restaurada = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ADMIN})
     assert restaurada.status_code == 200
+
+
+def _push_estado_limpio() -> None:
+    """Restaura el estado de semilla (proyectos/etapas/entregables/bitacora)
+    sin tocar usuarios. Los tests del modulo crean proyectos/etapas dinamicos
+    (p-N, e-N, b-N) que quedan referenciados por la bitacora vigente; si el
+    push siguiente deja proyectos huérfanos, el re-sync los rechaza con 422
+    y contamina los modulos que corren despues. Con la semilla restaurada
+    (referencias completas), el siguiente modulo parte de un estado valido."""
+    from app.semilla import BITACORA_SEMILLA, ENTREGABLES_SEMILLA, ETAPAS_SEMILLA, PROYECTOS_SEMILLA
+
+    estado = client.get("/api/sincronizacion").json()
+    estado["proyectos"] = [p.model_dump(mode="json", by_alias=True) for p in PROYECTOS_SEMILLA]
+    estado["etapas"] = [e.model_dump(mode="json", by_alias=True) for e in ETAPAS_SEMILLA]
+    estado["entregables"] = [e.model_dump(mode="json", by_alias=True) for e in ENTREGABLES_SEMILLA]
+    estado["bitacora"] = [b.model_dump(mode="json", by_alias=True) for b in BITACORA_SEMILLA]
+    restaurado = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ADMIN})
+    assert restaurado.status_code == 200
 
 
 def _bitacora_semilla() -> list[dict]:
