@@ -360,6 +360,16 @@ class ServicioProyectos:
                 raise ErrorValidacion(
                     f'La transicion "{entrada.id}" requiere etapa de origen y de destino.'
                 )
+            # Prefijo de id de bitacora (it67): solo entradas NUEVAS. Las
+            # vigentes son historial inmutable (3.5) y el canal normal
+            # siempre genera ids "b-..." (nuevo_id, bitacora.py); exigirlo
+            # al historial bloquearia para siempre re-syncs de estados con
+            # entradas de otra forma.
+            if not entrada.id.startswith("b-"):
+                raise ErrorValidacion(
+                    f'El id "{entrada.id}" de la coleccion "bitacora" '
+                    'debe comenzar con el prefijo "b-".'
+                )
             nuevas.append(entrada)
         return [*self._bitacora, *nuevas]
 
@@ -510,6 +520,31 @@ class ServicioProyectos:
                 raise ErrorValidacion("El nombre del entregable es obligatorio.")
             if entregable.version < 1:
                 raise ErrorValidacion("La version del entregable debe ser al menos 1.")
+        # Prefijos de id (it67, VULN-011): el canal normal los fija siempre
+        # (nuevo_id con prefijo por coleccion y la semilla los respeta); un
+        # push con ids de otra forma colaria id vacios o ids que ninguna
+        # coleccion reconoce (p.ej. un proyecto id="x" no colisiona con
+        # nada, pero tampoco lo genero nunca un caso de uso ni la semilla).
+        # Se aceptan las dos formas canonicas: "prefijo-..." (ids generados
+        # por nuevo_id) y "prefijo+digitos" (p1, e1, b1: ids de la semilla
+        # canonica de semilla.py). La bitacora no se valida aqui: entradas
+        # vigentes son historial inmutable (3.5); el prefijo "b-" de
+        # entradas nuevas vive en _fusionar_bitacora.
+        prefijos = {
+            "usuarios": ("u", [u.id for u in usuarios]),
+            "proyectos": ("p", [p.id for p in proyectos]),
+            "etapas": ("e", [e.id for e in etapas]),
+            "entregables": ("ent", [e.id for e in entregables]),
+        }
+        for clave, (prefijo, ids_entidades) in prefijos.items():
+            patron = re.compile(rf"^(?:{prefijo}-.+|{prefijo}\d+)$")
+            for id_entidad in ids_entidades:
+                if not patron.match(id_entidad):
+                    raise ErrorValidacion(
+                        f'El id "{id_entidad}" de la coleccion "{clave}" '
+                        f'debe usar el prefijo "{prefijo}-" o el formato de '
+                        f'semilla "{prefijo}" seguido de digitos.'
+                    )
         for etapa in etapas:
             if etapa.dependencias:
                 validar_dependencias(

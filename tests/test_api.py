@@ -596,6 +596,76 @@ def test_escribir_estado_bitacora_nueva_invalida_responde_422():
     _push_estado_limpio()
 
 
+def test_escribir_estado_prefijos_de_id_responde_422():
+    """Regresion it67 (VULN-011): el push no es canal para colar ids sin el
+    prefijo de su coleccion (u-/p-/e-/ent-); el canal normal los fija
+    siempre (nuevo_id) y la semilla los respeta. Una entrada de bitacora
+    NUEVA sin prefijo b- tambien se rechaza; el historial vigente no se
+    revalida (3.5)."""
+    estado = client.get("/api/sincronizacion").json()
+    base_bitacora = dict(estado["bitacora"][0], autorId=ADMIN, comentario="prueba it67")
+    # Proyecto con id sin prefijo p-.
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(
+            estado,
+            proyectos=[dict(estado["proyectos"][0], id="x-proyecto-it67"), *estado["proyectos"][1:]],
+        ),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Usuario con id sin prefijo u-.
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(
+            estado,
+            usuarios=[dict(estado["usuarios"][0], id="admin-sin-prefijo"), *estado["usuarios"][1:]],
+        ),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Etapa con id con prefijo de otra coleccion (p- en lugar de e-).
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(
+            estado,
+            etapas=[dict(estado["etapas"][0], id="p1-etapa-it67"), *estado["etapas"][1:]],
+        ),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Entregable con prefijo de etapa (e-) en lugar de ent-.
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(
+            estado,
+            entregables=[
+                dict(estado["entregables"][0], id="e-entregable-it67"),
+                *estado["entregables"][1:],
+            ],
+        ),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Entrada de bitacora NUEVA sin prefijo b-.
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(
+            estado,
+            bitacora=[*estado["bitacora"], dict(base_bitacora, id="entrada-it67")],
+        ),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # El estado vigente queda intacto tras los cinco rechazos.
+    vigente = client.get("/api/sincronizacion").json()
+    assert vigente["proyectos"] == estado["proyectos"]
+    assert vigente["usuarios"] == estado["usuarios"]
+    assert vigente["etapas"] == estado["etapas"]
+    assert vigente["entregables"] == estado["entregables"]
+    assert [b["id"] for b in vigente["bitacora"]] == [b["id"] for b in estado["bitacora"]]
+
+
 def test_crear_entregable_valida_nombre_y_version():
     """it66: el canal normal de entregables comparte las reglas del re-sync
     (nombre obligatorio con strip, version >= 1)."""

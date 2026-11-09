@@ -125,6 +125,31 @@ def test_sincronizacion_reemplazo_acepta_estado_con_admin_activo():
     assert analista["activo"] is False
 
 
+def test_sincronizacion_acepta_historial_bitacora_vigente_sin_prefijo():
+    """it67 (VULN-011): el prefijo "b-" solo se exige en entradas NUEVAS de
+    la fusion. Las vigentes son historial inmutable (3.5) y el servidor no
+    permite borrarlas; exigirles el prefijo bloquearia para siempre el
+    re-sync de un estado con historial de otra forma."""
+    servicio = ServicioProyectos()
+    servicio._repo.bitacora_reemplazar(
+        [b for b in servicio._bitacora if b.id != servicio._bitacora[0].id]
+    )
+    legacy = servicio._bitacora[0].model_copy(update={"id": "entrada-legacy-it67"})
+    servicio._bitacora_agregar(legacy)
+    entrantes = [b for b in servicio._bitacora]
+    estado = servicio.escribir_estado_completo(
+        {
+            "usuarios": [u.model_dump(mode="json", by_alias=True) for u in USUARIOS_SEMILLA],
+            "proyectos": [p.model_dump(mode="json", by_alias=True) for p in servicio.proyectos()],
+            "etapas": [e.model_dump(mode="json", by_alias=True) for e in servicio.etapas()],
+            "entregables": [e.model_dump(mode="json", by_alias=True) for e in servicio.entregables()],
+            "bitacora": [b.model_dump(mode="json", by_alias=True) for b in entrantes],
+        },
+        _admin().id,
+    )
+    assert any(b["id"] == "entrada-legacy-it67" for b in estado["bitacora"])
+
+
 # ---------- Via HTTP (reproduce el hallazgo de la iteracion 50) ----------
 
 
