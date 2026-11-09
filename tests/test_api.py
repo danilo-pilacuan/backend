@@ -385,6 +385,66 @@ def test_escribir_estado_fechas_invertidas_responde_422():
     assert respuesta.json()["codigo"] == "VALIDACION"
 
 
+def test_escribir_estado_usuarios_invalidos_responde_422_o_409():
+    """Regresion VULN-008: el push no es un canal para colar usuarios que
+    crear_usuario/editar_usuario rechazan (_validar_nombre, _validar_roles,
+    _validar_correo): nombre vacio, cero roles, correo con formato invalido
+    o duplicado (case-insensitive, DUPLICADO 409 como el canal normal)."""
+    estado = client.get("/api/sincronizacion").json()
+    objetivo = next(u for u in estado["usuarios"] if u["id"] == ANALISTA)
+    resto = [u for u in estado["usuarios"] if u["id"] != ANALISTA]
+    # Nombre vacio (espejo de _validar_nombre).
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, usuarios=[dict(objetivo, nombre="   "), *resto]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Sin roles (espejo de _validar_roles, 1.4).
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, usuarios=[dict(objetivo, roles=[]), *resto]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Correo con formato invalido (espejo de _validar_correo).
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, usuarios=[dict(objetivo, correo="sin-arroba"), *resto]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Correo duplicado de OTRO usuario, case-insensitive (409 DUPLICADO
+    # como el canal normal).
+    otro = next(u for u in estado["usuarios"] if u["id"] == PM)
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, usuarios=[dict(objetivo, correo=otro["correo"].upper()), *resto]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 409 and r.json()["codigo"] == "DUPLICADO"
+    # El estado vigente queda intacto tras los cuatro rechazos.
+    vigente = client.get("/api/sincronizacion").json()
+    analista = next(u for u in vigente["usuarios"] if u["id"] == ANALISTA)
+    assert analista == objetivo
+    # La normalizacion (VULN-008) NO muta un push legitimo: nombre con
+    # espacios y correo con mayusculas entran almacenados recortados y en
+    # minusculas, como los guardaria el canal normal.
+    variante = dict(objetivo, nombre=f"  {objetivo['nombre']}  ", correo=objetivo["correo"].upper())
+    aceptado = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, usuarios=[variante, *resto]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert aceptado.status_code == 200
+    guardado = next(u for u in aceptado.json()["usuarios"] if u["id"] == ANALISTA)
+    assert guardado["nombre"] == objetivo["nombre"]
+    assert guardado["correo"] == objetivo["correo"]
+    # Restaurar el estado vigente para los tests siguientes.
+    restaurado = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ADMIN})
+    assert restaurado.status_code == 200
+
+
 def test_escribir_estado_autoaprobacion_responde_422():
     """Espejo de validar_aprobacion (gates.ts 3.4): el autor no aprueba su
     propio documento, ni siquiera empujando el estado completo."""

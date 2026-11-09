@@ -252,6 +252,14 @@ class ServicioProyectos:
             bitacora = [BitacoraEntrada.model_validate(b) for b in cuerpo["bitacora"]]
         except ValidationError as exc:
             raise ErrorValidacion(f"Entidad invalida en el estado: {exc}") from exc
+        # Normalizacion de usuarios (VULN-008): el canal normal recorta el
+        # nombre y pasa el correo a minusculas (_validar_nombre/
+        # _validar_correo); el re-sync no puede almacenar variantes no
+        # normalizadas que rompan la unicidad case-insensitive del correo.
+        usuarios = [
+            u.model_copy(update={"nombre": u.nombre.strip(), "correo": u.correo.strip().lower()})
+            for u in usuarios
+        ]
         self._validar_invariantes_dominio(usuarios, proyectos, etapas, entregables)
         self._validar_ultimo_admin_activo(usuarios)
         self._validar_diff_usuarios(usuarios, actor_id)
@@ -424,6 +432,24 @@ class ServicioProyectos:
                 )
             if entregable.aprobado_por_id == entregable.creado_por_id:
                 raise ErrorValidacion("El autor de un entregable no puede aprobar su propio documento.")
+        # Usuarios (VULN-008): espejo de crear_usuario/editar_usuario
+        # (_validar_nombre, _validar_roles, _validar_correo): nombre no vacio,
+        # al menos un rol y correo con formato valido y unico
+        # (case-insensitive; el correo ya llega normalizado a minusculas).
+        # La regla de roles vivia en _validar_roles (canal normal); sin ella
+        # un push podia colar un usuario sin roles, que ningun caso de uso
+        # permite y que la matriz (1.4/1.5) no sabe interpretar.
+        vistos_correo: set[str] = set()
+        for usuario in usuarios:
+            if not usuario.nombre:
+                raise ErrorValidacion("El nombre del usuario es obligatorio.")
+            if len(usuario.roles) == 0:
+                raise ErrorValidacion("El usuario requiere al menos un rol (1.4).")
+            if not _CORREO_RE.match(usuario.correo):
+                raise ErrorValidacion("El correo no tiene un formato valido.")
+            if usuario.correo in vistos_correo:
+                raise ErrorDuplicado("usuario", "correo", usuario.correo)
+            vistos_correo.add(usuario.correo)
         for etapa in etapas:
             if etapa.dependencias:
                 validar_dependencias(
