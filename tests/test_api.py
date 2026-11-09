@@ -310,6 +310,93 @@ def test_escribir_estado_entidad_invalida_responde_422():
     assert respuesta.json()["codigo"] == "VALIDACION"
 
 
+def test_escribir_estado_avance_fuera_de_rango_responde_422():
+    """it61: el re-sync aplica las mismas invariantes que los casos de uso.
+
+    Antes un PUT directo aceptaba avance 150 (fuera de 0-100) que la API
+    normal rechaza en registrar avance; el push no es un canal para colar
+    datos invalidos (mismo tratamiento que VULN-001/002).
+    """
+    estado = client.get("/api/sincronizacion").json()
+    estado["etapas"][0]["avance"] = 150
+    fuera = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM})
+    assert fuera.status_code == 422
+    assert fuera.json()["codigo"] == "VALIDACION"
+    negativo = dict(estado, etapas=[dict(estado["etapas"][0], avance=-1), *estado["etapas"][1:]])
+    rechazado = client.put("/api/sincronizacion", json=negativo, headers={"X-Actor-Id": PM})
+    assert rechazado.status_code == 422
+    # El estado vigente queda intacto tras ambos rechazos.
+    vigente = client.get("/api/sincronizacion").json()
+    assert vigente["etapas"][0]["avance"] == 100
+
+
+def test_escribir_estado_presupuesto_negativo_responde_422():
+    estado = client.get("/api/sincronizacion").json()
+    estado["etapas"][0]["presupuestoAsignado"] = -5000
+    respuesta = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM})
+    assert respuesta.status_code == 422
+    assert respuesta.json()["codigo"] == "VALIDACION"
+    # Espejo en la coleccion de proyectos (crear_proyecto rechaza negativos).
+    proyecto_negativo = dict(
+        estado,
+        proyectos=[dict(estado["proyectos"][0], presupuestoEstimado=-1), *estado["proyectos"][1:]],
+    )
+    rechazado = client.put("/api/sincronizacion", json=proyecto_negativo, headers={"X-Actor-Id": PM})
+    assert rechazado.status_code == 422
+
+
+def test_escribir_estado_fechas_invertidas_responde_422():
+    estado = client.get("/api/sincronizacion").json()
+    estado["etapas"][0]["fechaFin"] = "2020-01-01"
+    respuesta = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": PM})
+    assert respuesta.status_code == 422
+    assert respuesta.json()["codigo"] == "VALIDACION"
+
+
+def test_escribir_estado_autoaprobacion_responde_422():
+    """Espejo de validar_aprobacion (gates.ts 3.4): el autor no aprueba su
+    propio documento, ni siquiera empujando el estado completo."""
+    estado = client.get("/api/sincronizacion").json()
+    # La semilla trae ent-7 sin aprobar, pero tests previos pueden haberlo
+    # aprobado: capturar el valor vigente para restaurar al final.
+    objetivo = next(e for e in estado["entregables"] if e["id"] == "ent-7")
+    aprobado_original = objetivo["aprobadoPorId"]
+    assert objetivo["creadoPorId"] == "u-doble"
+    autoaprobado = dict(
+        estado,
+        entregables=[
+            dict(objetivo, aprobadoPorId="u-doble", aprobadoEn="2026-11-09T01:00:00Z"),
+            *[e for e in estado["entregables"] if e["id"] != "ent-7"],
+        ],
+    )
+    respuesta = client.put("/api/sincronizacion", json=autoaprobado, headers={"X-Actor-Id": ADMIN})
+    assert respuesta.status_code == 422
+    assert respuesta.json()["codigo"] == "VALIDACION"
+    # Aprobacion sin fecha tambien se rechaza (el caso de uso siempre la registra).
+    sin_fecha = dict(
+        estado,
+        entregables=[dict(objetivo, aprobadoPorId="u-admin", aprobadoEn=None), *estado["entregables"][1:]],
+    )
+    rechazado = client.put("/api/sincronizacion", json=sin_fecha, headers={"X-Actor-Id": ADMIN})
+    assert rechazado.status_code == 422
+    # Aprobacion legitima por otro actor si se acepta (contrato del re-sync).
+    legitima = dict(
+        estado,
+        entregables=[
+            dict(objetivo, aprobadoPorId="u-admin", aprobadoEn="2026-11-09T01:00:00Z"),
+            *[e for e in estado["entregables"] if e["id"] != "ent-7"],
+        ],
+    )
+    aceptada = client.put("/api/sincronizacion", json=legitima, headers={"X-Actor-Id": ADMIN})
+    assert aceptada.status_code == 200
+    # Restaurar el estado vigente para los tests siguientes.
+    restaurado = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ADMIN})
+    assert restaurado.status_code == 200
+    vigente = client.get("/api/sincronizacion").json()
+    ent7 = next(e for e in vigente["entregables"] if e["id"] == "ent-7")
+    assert ent7["aprobadoPorId"] == aprobado_original
+
+
 # ---------- Colecciones planas (13.3: bootstrap plano de los stores) ----------
 
 

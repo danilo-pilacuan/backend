@@ -9,6 +9,7 @@ cuando main.py recibe DATABASE_URL (DEC-006). El servicio nunca toca SQL.
 
 import itertools
 import logging
+import math
 import re
 from datetime import UTC, datetime
 
@@ -241,6 +242,7 @@ class ServicioProyectos:
             bitacora = [BitacoraEntrada.model_validate(b) for b in cuerpo["bitacora"]]
         except ValidationError as exc:
             raise ErrorValidacion(f"Entidad invalida en el estado: {exc}") from exc
+        self._validar_invariantes_dominio(proyectos, etapas, entregables)
         self._validar_ultimo_admin_activo(usuarios)
         self._validar_diff_usuarios(usuarios, actor_id)
         bitacora = self._fusionar_bitacora(bitacora, actor_id)
@@ -301,6 +303,48 @@ class ServicioProyectos:
             nuevas.append(entrada)
         return [*self._bitacora, *nuevas]
 
+    def _validar_invariantes_dominio(
+        self,
+        proyectos: list[Proyecto],
+        etapas: list[EtapaTrabajo],
+        entregables: list[Entregable],
+    ) -> None:
+        """Mitigacion del hallazgo it61: el re-sync aplica las mismas
+        invariantes de dominio que los casos de uso; el push no es un canal
+        para colar datos que la API normal rechaza (mismo tratamiento que
+        VULN-001/002: no confiar en el cliente).
+
+        - Etapas: validar_etapa (fechas validas y coherentes, avance 0-100,
+          montos no negativos y finitos); el consumo mayor al asignado no se
+          rechaza porque es un estado legitimo del dominio
+          (presupuesto_excedido se calcula y se alerta, 5.4).
+        - Proyectos: presupuesto estimado finito y no negativo (espejo de
+          crear_proyecto; el asignado no tiene techo sobre el estimado).
+        - Entregables: espejo de validar_aprobacion (gates.ts 3.4): si hay
+          aprobador, no puede ser el autor del documento y debe venir con
+          fecha de aprobacion.
+        """
+        for etapa in etapas:
+            self._validar_datos_etapa(etapa)
+        for proyecto in proyectos:
+            monto = proyecto.presupuesto_estimado
+            if (
+                isinstance(monto, bool)
+                or not isinstance(monto, (int, float))
+                or not math.isfinite(monto)
+                or monto < 0
+            ):
+                raise ErrorValidacion("El presupuesto estimado no puede ser negativo.")
+        for entregable in entregables:
+            if entregable.aprobado_por_id is None:
+                continue
+            if entregable.aprobado_en is None:
+                raise ErrorValidacion(
+                    f'El entregable "{entregable.nombre}" aprobado requiere fecha de aprobacion.'
+                )
+            if entregable.aprobado_por_id == entregable.creado_por_id:
+                raise ErrorValidacion("El autor de un entregable no puede aprobar su propio documento.")
+
     def _validar_diff_usuarios(self, entrantes: list[Usuario], actor_id: str) -> None:
         """Mitigacion VULN-001 (parte segura): la coleccion usuarios es de
         solo Admin. Compara por id contra el estado vigente; si difiere en
@@ -351,7 +395,12 @@ class ServicioProyectos:
         if self._existe_nombre(nombre):
             raise ErrorDuplicado("proyecto", "nombre", nombre)
         presupuesto = datos.get("presupuesto_estimado", 0)
-        if isinstance(presupuesto, bool) or not isinstance(presupuesto, (int, float)) or presupuesto < 0:
+        if (
+            isinstance(presupuesto, bool)
+            or not isinstance(presupuesto, (int, float))
+            or not math.isfinite(presupuesto)
+            or presupuesto < 0
+        ):
             raise ErrorValidacion("El presupuesto estimado no puede ser negativo.")
         proyecto = Proyecto(
             id=nuevo_id("p"),
@@ -551,7 +600,12 @@ class ServicioProyectos:
         self._exigir_actor_valido(actor)
         self._exigir_estado_editable(proyecto.estado, "registrar consumo")
         exigir_permiso(proyecto.etapa, "registrarConsumo", actor.roles)
-        if isinstance(consumo, bool) or not isinstance(consumo, (int, float)) or consumo < 0:
+        if (
+            isinstance(consumo, bool)
+            or not isinstance(consumo, (int, float))
+            or not math.isfinite(consumo)
+            or consumo < 0
+        ):
             raise ErrorValidacion("El consumo no puede ser negativo.")
         self._etapas = [
             e if e.id != etapa_id else e.model_copy(update={"presupuesto_consumido": consumo}) for e in self._etapas
