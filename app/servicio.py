@@ -346,6 +346,20 @@ class ServicioProyectos:
                 raise ErrorValidacion(
                     f'La entrada de bitacora "{entrada.id}" tiene un autor que no existe (3.5).'
                 )
+            # Fecha y estructura de la entrada nueva (it66): el canal normal
+            # siempre registra fecha ISO del servidor (datetime.now UTC) y
+            # pares de etapa solo en transiciones; el push no puede colar
+            # fechas ilegibles ni transiciones sin origen/destino.
+            try:
+                datetime.fromisoformat(entrada.fecha.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ErrorValidacion(
+                    f'La entrada de bitacora "{entrada.id}" requiere una fecha ISO valida.'
+                ) from exc
+            if entrada.tipo == "transicion" and (entrada.etapa_origen is None or entrada.etapa_destino is None):
+                raise ErrorValidacion(
+                    f'La transicion "{entrada.id}" requiere etapa de origen y de destino.'
+                )
             nuevas.append(entrada)
         return [*self._bitacora, *nuevas]
 
@@ -430,6 +444,17 @@ class ServicioProyectos:
                 raise ErrorValidacion(
                     f'El entregable "{entregable.nombre}" aprobado requiere fecha de aprobacion.'
                 )
+            # Formato ISO de la fecha de aprobacion (it66): aprobar_entregable
+            # la registra con datetime.now().isoformat() (y el frontend con
+            # Date.toISOString()); sin esta regla el push colaba fechas
+            # ilegibles para el gate y los reportes.
+            try:
+                datetime.fromisoformat(entregable.aprobado_en.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ErrorValidacion(
+                    f'La fecha de aprobacion del entregable "{entregable.nombre}" '
+                    "debe ser una fecha valida."
+                ) from exc
             if entregable.aprobado_por_id == entregable.creado_por_id:
                 raise ErrorValidacion("El autor de un entregable no puede aprobar su propio documento.")
             aprobador = next((u for u in usuarios if u.id == entregable.aprobado_por_id), None)
@@ -477,6 +502,14 @@ class ServicioProyectos:
                     f'El autor "{entregable.creado_por_id}" del entregable '
                     f'"{entregable.nombre}" no existe.'
                 )
+        # Nombre y version del entregable (it66): espejo del fix de
+        # crear_entregable (nombre obligatorio, version >= 1); sin la regla
+        # el push colaria documentos sin titulo o con version 0/negativa.
+        for entregable in entregables:
+            if not entregable.nombre:
+                raise ErrorValidacion("El nombre del entregable es obligatorio.")
+            if entregable.version < 1:
+                raise ErrorValidacion("La version del entregable debe ser al menos 1.")
         for etapa in etapas:
             if etapa.dependencias:
                 validar_dependencias(
@@ -755,12 +788,20 @@ class ServicioProyectos:
         proyecto = self._exigir_proyecto(str(datos.get("proyecto_id", "")))
         self._exigir_actor_valido(actor)
         self._exigir_estado_editable(proyecto.estado, "cargar entregables")
+        # Nombre y version (it66): paridad de producto con la validacion de
+        # insumos del re-sync; el nombre sale con strip como en proyectos.
+        nombre = str(datos.get("nombre", "")).strip()
+        if not nombre:
+            raise ErrorValidacion("El nombre del entregable es obligatorio.")
+        version = datos.get("version", 1)
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            raise ErrorValidacion("La version del entregable debe ser al menos 1.")
         entregable = Entregable(
             id=nuevo_id("ent"),
             proyecto_id=proyecto.id,
             etapa=datos["etapa"],
-            nombre=str(datos.get("nombre", "")),
-            version=int(datos.get("version", 1)),
+            nombre=nombre,
+            version=version,
             creado_por_id=actor.id,
         )
         self._entregables_agregar(entregable)

@@ -485,6 +485,134 @@ def test_escribir_estado_referencias_fantasma_responde_422():
     assert vigente["proyectos"] == estado["proyectos"]
 
 
+def test_escribir_estado_insumos_de_entregable_responde_422():
+    """Regresion it66: el push no es canal para colar entregables sin
+    nombre, con version < 1 o con fecha de aprobacion no ISO; el canal
+    normal los valida (crear_entregable) y aprobar_entregable registra
+    siempre datetime.now().isoformat()."""
+    estado = client.get("/api/sincronizacion").json()
+    entregable = dict(estado["entregables"][0])
+    caso = dict(estado, entregables=[*estado["entregables"][1:]])
+    # Nombre vacio.
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(caso, entregables=[dict(entregable, nombre="")]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Version menor a 1.
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(caso, entregables=[dict(entregable, version=0)]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Fecha de aprobacion no ISO (con aprobador vigente).
+    con_fecha = next(
+        e for e in estado["entregables"] if e["aprobadoPorId"] is not None
+    )
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(
+            caso,
+            entregables=[
+                dict(con_fecha, aprobadoEn="09/11/2026"),
+                *[e for e in estado["entregables"] if e["id"] != con_fecha["id"]],
+            ],
+        ),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # El nombre se normaliza con strip (contrato conservado).
+    normalizado = client.put(
+        "/api/sincronizacion",
+        json=dict(caso, entregables=[dict(entregable, nombre="  Nombre con borde  ")]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert normalizado.status_code == 200
+    _push_estado_limpio()
+
+
+def test_escribir_estado_bitacora_nueva_invalida_responde_422():
+    """Regresion it66: el append de bitacora solo acepta entradas con fecha
+    ISO (el servidor la registra con datetime.now()) y transiciones con
+    par de etapas completo; el historial vigente no se revalida (3.5)."""
+    estado = client.get("/api/sincronizacion").json()
+    vigente_ids = [b["id"] for b in estado["bitacora"]]
+    base = dict(estado["bitacora"][0], id="b-it66-1", autorId=ADMIN, comentario="prueba it66")
+    # Fecha no ISO.
+    fecha_mala = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, bitacora=[*estado["bitacora"], dict(base, fecha="09/11/2026")]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert fecha_mala.status_code == 422
+    assert fecha_mala.json()["codigo"] == "VALIDACION"
+    # Transicion sin par de etapas.
+    transicion_mala = client.put(
+        "/api/sincronizacion",
+        json=dict(
+            estado,
+            bitacora=[
+                *estado["bitacora"],
+                dict(
+                    base,
+                    id="b-it66-2",
+                    fecha="2026-11-09T12:00:00+00:00",
+                    tipo="transicion",
+                    etapaOrigen=None,
+                    etapaDestino=None,
+                ),
+            ],
+        ),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert transicion_mala.status_code == 422
+    assert transicion_mala.json()["codigo"] == "VALIDACION"
+    # Transicion completa si se acepta (contrato conservado).
+    transicion_ok = client.put(
+        "/api/sincronizacion",
+        json=dict(
+            estado,
+            bitacora=[
+                *estado["bitacora"],
+                dict(
+                    base,
+                    id="b-it66-3",
+                    fecha="2026-11-09T12:00:00+00:00",
+                    tipo="transicion",
+                    etapaOrigen="PoC",
+                    etapaDestino="ValidacionPoC",
+                ),
+            ],
+        ),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert transicion_ok.status_code == 200
+    assert any(b["id"] == "b-it66-3" for b in transicion_ok.json()["bitacora"])
+    # El historial vigente quedo intacto tras los dos rechazos.
+    despues = client.get("/api/sincronizacion").json()
+    assert [b["id"] for b in despues["bitacora"]][: len(vigente_ids)] == vigente_ids
+    _push_estado_limpio()
+
+
+def test_crear_entregable_valida_nombre_y_version():
+    """it66: el canal normal de entregables comparte las reglas del re-sync
+    (nombre obligatorio con strip, version >= 1)."""
+    base = {"etapa": "PoC", "version": 1}
+    sin_nombre = _post("/api/proyectos/p2/entregables", {**base, "nombre": "   "})
+    assert sin_nombre.status_code == 422
+    assert sin_nombre.json()["codigo"] == "VALIDACION"
+    version_cero = _post("/api/proyectos/p2/entregables", {**base, "nombre": "X", "version": 0})
+    assert version_cero.status_code == 422
+    assert version_cero.json()["codigo"] == "VALIDACION"
+    feliz = _post("/api/proyectos/p2/entregables", {**base, "nombre": "  Plan de PoC B  "})
+    assert feliz.status_code == 201
+    assert feliz.json()["nombre"] == "Plan de PoC B"
+    assert feliz.json()["version"] == 1
+    _push_estado_limpio()
+
+
 def test_escribir_estado_autoaprobacion_responde_422():
     """Espejo de validar_aprobacion (gates.ts 3.4): el autor no aprueba su
     propio documento, ni siquiera empujando el estado completo."""
