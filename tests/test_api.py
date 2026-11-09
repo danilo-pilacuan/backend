@@ -346,6 +346,37 @@ def test_escribir_estado_presupuesto_negativo_responde_422():
     assert rechazado.status_code == 422
 
 
+def test_escribir_estado_nombre_proyecto_duplicado_responde_409():
+    """Regresion VULN-007: el push no es un canal para colar un nombre de
+    proyecto duplicado que crear_proyecto/editar_proyecto rechazan con 409
+    (DUPLICADO, case-insensitive como _existe_nombre)."""
+    estado = client.get("/api/sincronizacion").json()
+    base = dict(estado["proyectos"][0])
+    duplicado = dict(base, id="p-duplicado-vuln007", nombre=base["nombre"])
+    con_duplicado = dict(estado, proyectos=[*estado["proyectos"], duplicado])
+    r = client.put("/api/sincronizacion", json=con_duplicado, headers={"X-Actor-Id": ADMIN})
+    assert r.status_code == 409
+    assert r.json()["codigo"] == "DUPLICADO"
+    # La deteccion es case-insensitive (espejo de _existe_nombre).
+    distinto = dict(base, id="p-duplicado-vuln007b", nombre=base["nombre"].upper())
+    con_mayusculas = dict(estado, proyectos=[*estado["proyectos"], distinto])
+    r = client.put("/api/sincronizacion", json=con_mayusculas, headers={"X-Actor-Id": ADMIN})
+    assert r.status_code == 409
+    # El estado vigente queda intacto tras ambos rechazos.
+    vigente = client.get("/api/sincronizacion").json()
+    assert len(vigente["proyectos"]) == len(estado["proyectos"])
+    # Un push con nombre unico sigue siendo aceptado (contrato del re-sync).
+    nuevo = dict(base, id="p-unico-vuln007", nombre="Proyecto Unico VULN 007")
+    con_nuevo = dict(estado, proyectos=[*estado["proyectos"], nuevo])
+    aceptado = client.put("/api/sincronizacion", json=con_nuevo, headers={"X-Actor-Id": ADMIN})
+    assert aceptado.status_code == 200
+    # Restaurar el estado vigente para los tests siguientes.
+    restaurado = client.put("/api/sincronizacion", json=estado, headers={"X-Actor-Id": ADMIN})
+    assert restaurado.status_code == 200
+    vigente = client.get("/api/sincronizacion").json()
+    assert all(p["id"] != "p-unico-vuln007" for p in vigente["proyectos"])
+
+
 def test_escribir_estado_fechas_invertidas_responde_422():
     estado = client.get("/api/sincronizacion").json()
     estado["etapas"][0]["fechaFin"] = "2020-01-01"

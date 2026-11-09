@@ -401,6 +401,15 @@ class ServicioProyectos:
                 or monto < 0
             ):
                 raise ErrorValidacion("El presupuesto estimado no puede ser negativo.")
+        # Unicidad del nombre (VULN-007): espejo de crear_proyecto/editar_
+        # proyecto (_existe_nombre, case-insensitive); el push no es un canal
+        # para colar un duplicado que la API normal rechaza con 409.
+        vistos: set[str] = set()
+        for proyecto in proyectos:
+            clave = proyecto.nombre.lower()
+            if clave in vistos:
+                raise ErrorDuplicado("proyecto", "nombre", proyecto.nombre)
+            vistos.add(clave)
         for entregable in entregables:
             if entregable.proyecto_id not in ids_proyectos:
                 raise ErrorValidacion(
