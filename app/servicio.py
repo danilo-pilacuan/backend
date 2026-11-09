@@ -432,6 +432,24 @@ class ServicioProyectos:
                 )
             if entregable.aprobado_por_id == entregable.creado_por_id:
                 raise ErrorValidacion("El autor de un entregable no puede aprobar su propio documento.")
+            aprobador = next((u for u in usuarios if u.id == entregable.aprobado_por_id), None)
+            if aprobador is None:
+                raise ErrorValidacion(
+                    f'El aprobador "{entregable.aprobado_por_id}" del entregable '
+                    f'"{entregable.nombre}" no existe.'
+                )
+            # El aprobador puede estar inactivo: aprobar_entregable solo
+            # exige actor activo en el momento de aprobar (1.8); desactivar
+            # al aprobador despues no invalida el historial del gate.
+        # Patrocinador del proyecto (it65): el canal normal solo lo fija al
+        # crear (actor por defecto o id dado) y no se edita despues; un
+        # patrocinador fantasma dejaria la trazabilidad (1.2) sin dueno.
+        for proyecto in proyectos:
+            if next((u for u in usuarios if u.id == proyecto.patrocinador_id), None) is None:
+                raise ErrorValidacion(
+                    f'El patrocinador "{proyecto.patrocinador_id}" del proyecto '
+                    f'"{proyecto.nombre}" no existe.'
+                )
         # Usuarios (VULN-008): espejo de crear_usuario/editar_usuario
         # (_validar_nombre, _validar_roles, _validar_correo): nombre no vacio,
         # al menos un rol y correo con formato valido y unico
@@ -450,6 +468,15 @@ class ServicioProyectos:
             if usuario.correo in vistos_correo:
                 raise ErrorDuplicado("usuario", "correo", usuario.correo)
             vistos_correo.add(usuario.correo)
+        # Creador del entregable (it65): crear_entregable lo fija como el
+        # actor del caso de uso; un creador fantasma romperia la regla de
+        # autoaprobacion (no podria distinguirse del autor real).
+        for entregable in entregables:
+            if next((u for u in usuarios if u.id == entregable.creado_por_id), None) is None:
+                raise ErrorValidacion(
+                    f'El autor "{entregable.creado_por_id}" del entregable '
+                    f'"{entregable.nombre}" no existe.'
+                )
         for etapa in etapas:
             if etapa.dependencias:
                 validar_dependencias(

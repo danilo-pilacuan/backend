@@ -445,6 +445,46 @@ def test_escribir_estado_usuarios_invalidos_responde_422_o_409():
     assert restaurado.status_code == 200
 
 
+def test_escribir_estado_referencias_fantasma_responde_422():
+    """Regresion it65: el push no es un canal para colar referencias a
+    usuarios que no existen (aprobador/autor de un entregable, patrocinador
+    de un proyecto); el canal normal los fija como el actor del caso de uso
+    (crear_proyecto, crear_entregable, aprobar_entregable), asi que nunca
+    pueden ser fantasmas. Sin esto, el gate contaria aprobaciones de
+    usuarios inexistentes (bypass de gobernanza)."""
+    estado = client.get("/api/sincronizacion").json()
+    entregable = dict(estado["entregables"][0])
+    proyecto = dict(estado["proyectos"][0])
+    # Aprobador fantasma en un entregable aprobado.
+    mutado = dict(entregable, aprobadoPorId="u-fantasma")
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, entregables=[mutado, *estado["entregables"][1:]]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Autor fantasma en un entregable (aprobado o no).
+    mutado = dict(entregable, creadoPorId="u-fantasma")
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, entregables=[mutado, *estado["entregables"][1:]]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # Patrocinador fantasma en un proyecto.
+    mutado = dict(proyecto, patrocinadorId="u-fantasma")
+    r = client.put(
+        "/api/sincronizacion",
+        json=dict(estado, proyectos=[mutado, *estado["proyectos"][1:]]),
+        headers={"X-Actor-Id": ADMIN},
+    )
+    assert r.status_code == 422 and r.json()["codigo"] == "VALIDACION"
+    # El estado vigente queda intacto tras los tres rechazos.
+    vigente = client.get("/api/sincronizacion").json()
+    assert vigente["entregables"] == estado["entregables"]
+    assert vigente["proyectos"] == estado["proyectos"]
+
+
 def test_escribir_estado_autoaprobacion_responde_422():
     """Espejo de validar_aprobacion (gates.ts 3.4): el autor no aprueba su
     propio documento, ni siquiera empujando el estado completo."""
